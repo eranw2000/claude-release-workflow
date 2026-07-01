@@ -45,20 +45,20 @@ if ! echo "$COMMAND" | grep -qE 'git[[:space:]]+(-{1,2}[^[:space:]]+[[:space:]]+
   exit 0
 fi
 
-# Emit the block payload and exit. $1 is a short reason suffix for the log line.
+# Block the tool call and exit. $1 is a short reason suffix.
+# A PreToolUse hook blocks ONLY via exit code 2 with the message on stderr. The old
+# stdout {"decision":"block"} / hookSpecificOutput-without-hookEventName form is NOT
+# honored for PreToolUse and fails OPEN (the push would be allowed). Confirmed against
+# https://code.claude.com/docs/en/hooks.md.
 emit_block() {
-  jq -n \
-    --arg cmd "$COMMAND" \
-    --arg why "$1" \
-    '{
-      decision: "block",
-      reason: ("Blocked: raw `git push` to main/master (" + $why + "). Use /release to update README + project notes and verify the deploy as part of the same atomic action."),
-      hookSpecificOutput: {
-        permissionDecision: "deny",
-        additionalContext: ("Push attempted: " + $cmd + "\n\nWhy this is blocked (" + $why + "): releases always go through /release, never a raw git push. /release auto-detects whether this is a trunk-mode project (commit straight to main) or a PR-mode project (merge open PRs), then updates docs + pushes + verifies the auto-deploy.\n\nBypass for emergencies (use sparingly):\n  - Set CLAUDE_ALLOW_PUSH_MAIN=1 in the env, OR\n  - Append #allow-push-main as a comment in the bash command itself.")
-      }
-    }'
-  exit 0
+  local why="$1"
+  {
+    echo "Blocked: raw \`git push\` to main/master ($why). Use /release, which updates README + project notes and verifies the deploy as part of the same atomic action."
+    echo "Push attempted: $COMMAND"
+    echo "/release auto-detects trunk mode (commit straight to main) vs PR mode (merge open PRs), then updates docs + pushes + verifies the auto-deploy."
+    echo "Bypass for emergencies (use sparingly): set CLAUDE_ALLOW_PUSH_MAIN=1 in the env, OR append #allow-push-main as a comment in the bash command."
+  } >&2
+  exit 2
 }
 
 # --- Layer 1: explicit main/master destination -------------------------------
