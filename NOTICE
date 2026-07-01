@@ -1,0 +1,10 @@
+claude-release-workflow
+Copyright (c) 2026 Eran Wyler
+
+All skills, shared protocols, and hooks in this repository are original to this
+project. The MIT License in LICENSE applies to all of them.
+
+This framework pairs with, but does not bundle, a separate set of review agents
+published at https://github.com/eranw2000/claude-review-agents (code-reviewer,
+deploy-guard, pr-validator). Those agents are installed separately; the
+pr-checkpoint skill uses them if present and skips them if not.
