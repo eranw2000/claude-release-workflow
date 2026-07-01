@@ -10,6 +10,12 @@ The idea is a small, repeatable path from a feature branch to a verified product
 
 A `block-git-push-main.sh` PreToolUse hook backs this up: it deterministically blocks any raw `git push` to `main` / `master` and points you at `/release`. It is the safety net for when the model forgets the workflow.
 
+## The flow
+
+![Ship-to-production flow](docs/release-flow.png)
+
+Source: [docs/release-flow.drawio](docs/release-flow.drawio) (editable in draw.io).
+
 ## Why two verbs
 
 `/pr-checkpoint` is the iterate stage. You run it as many times as you like while building a feature: it opens or updates a PR and gives you a running local container to test against, but it never merges, never deploys, and never updates your release docs (that would be premature).

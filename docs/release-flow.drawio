@@ -1,0 +1,66 @@
+<mxfile host="app.diagrams.net" type="device">
+  <diagram name="release-workflow" id="relflow">
+    <mxGraphModel dx="1400" dy="800" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="820" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="title" value="claude-release-workflow : ship-to-production flow" style="text;html=1;fontSize=20;fontStyle=1;fontColor=#0050b3;align=left;verticalAlign=middle;" vertex="1" parent="1"><mxGeometry x="40" y="20" width="900" height="36" as="geometry"/></mxCell>
+
+        <mxCell id="legend" value="Legend&#10;• green = start / branch work&#10;• blue = skill step / action&#10;• red diamond = decision&#10;• orange = doc artifact&#10;• gray = guard hook&#10;• yellow = deploy target" style="rounded=0;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=0;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;whiteSpace=wrap;html=1;fontFamily=Helvetica;" vertex="1" parent="1"><mxGeometry x="1120" y="70" width="330" height="150" as="geometry"/></mxCell>
+
+        <!-- STAGE 1: ITERATE -->
+        <mxCell id="s1" value="Iterate : /pr-checkpoint  (no merge, no prod)" style="rounded=0;fillColor=#fafafa;strokeColor=#0050b3;fontStyle=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;dashed=1;strokeWidth=2;html=1;" vertex="1" parent="1"><mxGeometry x="40" y="80" width="330" height="560" as="geometry"/></mxCell>
+        <mxCell id="s1a" value="feature branch work" style="ellipse;fillColor=#d5e8d4;strokeColor=#82b366;html=1;" vertex="1" parent="1"><mxGeometry x="90" y="120" width="230" height="50" as="geometry"/></mxCell>
+        <mxCell id="s1b" value="commit + push the branch" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;" vertex="1" parent="1"><mxGeometry x="90" y="200" width="230" height="50" as="geometry"/></mxCell>
+        <mxCell id="s1c" value="open / update draft PR" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;" vertex="1" parent="1"><mxGeometry x="90" y="280" width="230" height="50" as="geometry"/></mxCell>
+        <mxCell id="s1d" value="advisory review agents&#10;code-reviewer · deploy-guard · pr-validator" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="90" y="360" width="230" height="60" as="geometry"/></mxCell>
+        <mxCell id="s1e" value="rebuild local Docker → test on localhost" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="90" y="450" width="230" height="60" as="geometry"/></mxCell>
+        <mxCell id="dec1" value="ready to ship?" style="rhombus;fillColor=#f8cecc;strokeColor=#b85450;html=1;" vertex="1" parent="1"><mxGeometry x="120" y="540" width="170" height="80" as="geometry"/></mxCell>
+
+        <!-- STAGE 2: SHIP -->
+        <mxCell id="s2" value="Ship : /release  (the atomic gate)" style="rounded=0;fillColor=#fafafa;strokeColor=#0050b3;fontStyle=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;dashed=1;strokeWidth=2;html=1;" vertex="1" parent="1"><mxGeometry x="420" y="80" width="340" height="560" as="geometry"/></mxCell>
+        <mxCell id="s2a" value="merge PR  /  commit to main" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;" vertex="1" parent="1"><mxGeometry x="470" y="120" width="240" height="50" as="geometry"/></mxCell>
+        <mxCell id="s2b" value="update README + project notes" style="shape=document;fillColor=#ffe6cc;strokeColor=#d79b00;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="470" y="200" width="240" height="60" as="geometry"/></mxCell>
+        <mxCell id="s2c" value="push to all remotes" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;" vertex="1" parent="1"><mxGeometry x="470" y="290" width="240" height="50" as="geometry"/></mxCell>
+        <mxCell id="guard" value="block-git-push-main hook&#10;raw push to main → exit 2 (use /release)" style="rounded=0;fillColor=#eeeeee;strokeColor=#999999;html=1;whiteSpace=wrap;fontStyle=2;dashed=1;" vertex="1" parent="1"><mxGeometry x="470" y="370" width="240" height="60" as="geometry"/></mxCell>
+        <mxCell id="s2d" value="verify deploy: live commit == pushed commit" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="470" y="460" width="240" height="60" as="geometry"/></mxCell>
+        <mxCell id="s2e" value="rebuild local Docker to match prod" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="470" y="550" width="240" height="50" as="geometry"/></mxCell>
+
+        <!-- STAGE 3: VERIFY -->
+        <mxCell id="s3" value="Verify : /production-smoke  (read-only)" style="rounded=0;fillColor=#fafafa;strokeColor=#0050b3;fontStyle=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;dashed=1;strokeWidth=2;html=1;" vertex="1" parent="1"><mxGeometry x="810" y="80" width="300" height="560" as="geometry"/></mxCell>
+        <mxCell id="s3a" value="GET health + key routes (200)" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="850" y="120" width="220" height="50" as="geometry"/></mxCell>
+        <mxCell id="s3b" value="deploy commit live &amp; not stale" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="850" y="200" width="220" height="50" as="geometry"/></mxCell>
+        <mxCell id="s3c" value="DEBUG off · scan logs for 5xx" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="850" y="280" width="220" height="50" as="geometry"/></mxCell>
+        <mxCell id="dec2" value="all green?" style="rhombus;fillColor=#f8cecc;strokeColor=#b85450;html=1;" vertex="1" parent="1"><mxGeometry x="875" y="360" width="170" height="80" as="geometry"/></mxCell>
+        <mxCell id="done" value="shipped ✓" style="ellipse;fillColor=#d5e8d4;strokeColor=#82b366;html=1;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="850" y="470" width="100" height="50" as="geometry"/></mxCell>
+        <mxCell id="roll" value="rollback / fix-forward" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="970" y="470" width="120" height="50" as="geometry"/></mxCell>
+
+        <!-- DATA / TARGET column -->
+        <mxCell id="host" value="prod host&#10;Render / Vercel / Netlify" style="shape=cylinder3;size=15;fillColor=#fff2cc;strokeColor=#d6b656;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="1200" y="280" width="180" height="90" as="geometry"/></mxCell>
+
+        <!-- EDGES -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#82b366;strokeWidth=2;html=1;" edge="1" parent="1" source="s1a" target="s1b"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s1b" target="s1c"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s1c" target="s1d"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s1d" target="s1e"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s1e" target="dec1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" value="no: keep iterating" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#b85450;strokeWidth=2;dashed=1;html=1;fontColor=#b85450;" edge="1" parent="1" source="dec1" target="s1b"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="55" y="580"/></Array></mxGeometry></mxCell>
+        <mxCell id="e7" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#82b366;strokeWidth=2;html=1;fontColor=#82b366;" edge="1" parent="1" source="dec1" target="s2a"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s2a" target="s2b"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s2b" target="s2c"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#999999;strokeWidth=2;dashed=1;html=1;" edge="1" parent="1" source="s2c" target="guard"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="guard" target="s2d"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s2d" target="s2e"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s2d" target="host"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s2e" target="s3a"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s3a" target="s3b"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s3b" target="s3c"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#0050b3;strokeWidth=2;html=1;" edge="1" parent="1" source="s3c" target="dec2"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e18" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#82b366;strokeWidth=2;html=1;fontColor=#82b366;" edge="1" parent="1" source="dec2" target="done"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e19" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;strokeColor=#b85450;strokeWidth=2;html=1;fontColor=#b85450;" edge="1" parent="1" source="dec2" target="roll"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e20" value="reads live commit" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=classic;startArrow=classic;strokeColor=#999999;strokeWidth=2;dashed=1;html=1;" edge="1" parent="1" source="s3b" target="host"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
