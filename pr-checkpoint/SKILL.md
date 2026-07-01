@@ -22,15 +22,19 @@ For the **ship-to-prod** verb, use `/release` instead. `/release` is what merges
 
 ## Step 0: Mode guard
 
-Confirm we are on a feature branch with a diff against main:
+First resolve the repo's real base branch (do NOT assume `main`, it may be `master` or `develop`), then confirm we are on a feature branch with a diff against it:
 
 ```bash
-git rev-parse --abbrev-ref HEAD
-git diff main..HEAD --quiet; echo "diff_exit=$?"
+BASE=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+BASE=${BASE:-main}   # fall back to main if origin/HEAD isn't set
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+git diff "$BASE"...HEAD --quiet; echo "diff_exit=$?"
 ```
 
-- **Current branch is `main` / `master`**: bail with `you're on main, nothing to checkpoint. Check out a feature branch first (git checkout -b feature/<name>).` Stop.
-- **Feature branch but no diff against main**: bail with `feature branch has no commits ahead of main. Nothing to checkpoint yet.` Stop.
+Use `$BASE` everywhere below instead of a literal `main`.
+
+- **Current branch is the base branch (`$BASE`, i.e. `main` / `master`)**: bail with `you're on the base branch, nothing to checkpoint. Check out a feature branch first (git checkout -b feature/<name>).` Stop.
+- **Feature branch but no diff against `$BASE`**: bail with `feature branch has no commits ahead of the base. Nothing to checkpoint yet.` Stop.
 - **Feature branch with diff**: continue.
 
 ## Process
@@ -38,8 +42,8 @@ git diff main..HEAD --quiet; echo "diff_exit=$?"
 ### 1. Assess the work
 
 - `git status`: uncommitted work
-- `git diff main...HEAD`: all changes on the branch
-- `git log main..HEAD --oneline`: commit history on the branch
+- `git diff "$BASE"...HEAD`: all changes on the branch (three-dot, against the merge-base)
+- `git log "$BASE"..HEAD --oneline`: commit history on the branch
 - Any review-notes file your process uses (e.g. `COMMENTS.md`): surface unresolved blockers as a warning, do not refuse (this is a checkpoint, not a release)
 - A spec or requirements file if your project keeps one: reference the relevant IDs in the PR body
 
@@ -58,10 +62,10 @@ If the working tree is already clean, skip this step.
 **Preflight (mandatory):** before pushing, run the harness-files protection check from `~/.claude/skills/_shared/harness-files-protection.md`. If the target remote is one you do not own personally, verify no Claude / AI-assistant harness files (`CLAUDE.md`, `MEMORY.md`, `AGENTS.md`, `.claude/`, etc.) are tracked, and that `.gitignore` covers the full set. If any harness file is tracked on a client remote, STOP and surface the file list. Never push harness files to a repo you do not own.
 
 ```bash
-git push -u origin <branch-name>
+git push -u origin "$BRANCH"
 ```
 
-If a push is rejected, fetch + rebase from the remote and retry.
+If a push is rejected because the remote moved, fetch + rebase from the remote and retry. A rebase rewrites your local branch, so the retry of an already-published feature branch needs `git push --force-with-lease` (never a plain `--force`, which clobbers a teammate's push). `--force-with-lease` on a feature branch is the one carve-out from the "never force-push" rule; it never applies to the base branch.
 
 ### 4. Write the PR body
 
@@ -86,12 +90,19 @@ Brief context. If a requirements file exists, reference the IDs this PR addresse
 
 PR title under 70 characters. Mark as draft if your repo conventions support it (`gh pr create --draft`).
 
-### 5. Create the PR
+### 5. Create or update the PR
 
-Use `gh pr create` with a HEREDOC body:
+This skill is meant to be re-run on the same branch as you keep working, so **check for an existing PR first**. `gh pr create` errors out (`a pull request for branch ... already exists`) on the second run otherwise.
 
 ```bash
-gh pr create --draft --title "<title under 70 chars>" --body "$(cat <<'EOF'
+EXISTING=$(gh pr view "$BRANCH" --json url,state -q 'select(.state=="OPEN") | .url' 2>/dev/null)
+```
+
+- **A PR already exists** (`$EXISTING` is non-empty): the branch push in step 3 already updated it. Do NOT create a new one. Optionally refresh the body with `gh pr edit "$BRANCH" --body "..."`. Reuse `$EXISTING` as the PR URL and continue.
+- **No PR yet**: create one with a HEREDOC body, pinning the base to the resolved `$BASE`:
+
+```bash
+gh pr create --draft --base "$BASE" --head "$BRANCH" --title "<title under 70 chars>" --body "$(cat <<'EOF'
 ## What
 ...
 ## Why
@@ -108,7 +119,7 @@ EOF
 
 If the project does not use draft PRs, drop `--draft`.
 
-Capture the PR URL.
+Capture the PR URL (the new one, or `$EXISTING`).
 
 ### 6. Run the review agents (advisory, non-blocking)
 
@@ -116,7 +127,7 @@ Capture the PR URL.
 
 This step pairs with a companion set of review agents (a code-quality reviewer, a pre-ship deploy guard, and a test-runner / PR validator). If you have them installed, spawn them and collect their reports. These are advisory: a checkpoint is the iterate stage, so **no finding from any of them refuses, blocks, or rolls back the PR**. The hard gate is `/release`.
 
-Launch the agents in a single message so they run in parallel (they are independent). Each agent reads the branch itself (`git diff main...HEAD`, `gh pr view` / `gh pr diff`). Tell each one this is a checkpoint, not a release, so it reports rather than gates.
+Launch the agents in a single message so they run in parallel (they are independent). Each agent reads the branch itself (`git diff "$BASE"...HEAD`, `gh pr view` / `gh pr diff`). Tell each one this is a checkpoint, not a release, so it reports rather than gates.
 
 Handle their results as advice only:
 - An agent failing, timing out, or finding blockers must NOT undo the PR. Capture what it returned and move on.

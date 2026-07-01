@@ -56,11 +56,14 @@ If the remote is **client**:
 
 ```bash
 # 3. Check whether any harness file is currently tracked
+# The (^|.*/) prefix on every alternative is load-bearing: without it a nested
+# sub/dir/.claude/settings.json or docs/AGENTS.md slips past a ^-anchored match
+# and leaks. git ls-files prints full paths, so match anywhere in the path.
 git ls-files \
-  | grep -E '^(CLAUDE\.md|.*\/CLAUDE\.md|CLAUDE\.local\.md|MEMORY\.md|.*\/MEMORY\.md|AGENTS\.md|\.claude/|\.cursor|\.aider|\.windsurf|\.github/copilot-instructions\.md)'
+  | grep -E '(^|.*/)(CLAUDE\.md|CLAUDE\.local\.md|MEMORY\.md|AGENTS\.md|\.claude/|\.cursor|\.aider|\.windsurf|copilot-instructions\.md)'
 ```
 
-- **No matches**: confirm `.gitignore` blocks the full set (section 1). If any glob is missing, append it, stage `.gitignore`, and commit `chore: gitignore AI harness files for shared repo`.
+- **No matches**: confirm `.gitignore` actually blocks the full set (section 1). Do not eyeball it; test each glob with `git check-ignore`. For a representative path per entry (e.g. `CLAUDE.md`, `sub/CLAUDE.md`, `.claude/x`, `.cursor/x`), run `git check-ignore -v <path>`; a path that prints nothing is NOT ignored, so append the missing glob, stage `.gitignore`, and commit `chore: gitignore AI harness files for shared repo`.
 - **Matches found**: STOP the push. Report which files are tracked and ask whether to:
   - (a) `git rm --cached <files>` + add to `.gitignore` + commit + then push (recommended), or
   - (b) push to personal remotes only and skip the client remote this round.

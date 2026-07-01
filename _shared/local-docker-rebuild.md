@@ -15,10 +15,19 @@ docker info >/dev/null 2>&1 || skip
 
 If `docker` is not installed or the daemon is not running, skip this step silently and continue.
 
+## Resolve the repo dir first
+
+The session working directory is often not the code repo (it can be a separate data dir), so resolve the repo root before any detection and run every command from there:
+
+```bash
+REPO=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null) || REPO="$PWD"
+cd "$REPO"
+```
+
 ## Detection (in order)
 
 1. **Compose file in repo root**: look for `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, or `compose.yaml`.
-2. **Compose project up**: from the repo dir, run `docker compose ps --status running --quiet`. If it returns container IDs, this repo IS running locally via compose.
+2. **Compose project up**: from the repo dir, run `docker compose ps --status running --quiet 2>/dev/null` (the `--status` flag needs Compose v2; the redirect keeps an older Compose from erroring the detection). If it returns container IDs, this repo IS running locally via compose.
 3. **Fallback (no compose)**: if there is a `Dockerfile` but no compose file, run `docker ps --format '{{.Names}}\t{{.Image}}'` and match by image or container name containing the repo basename (case-insensitive).
 
 If nothing is detected, say so in one line and move on. Do NOT start a stopped container that was not running before, only update what was already live.

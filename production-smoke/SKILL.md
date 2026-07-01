@@ -24,7 +24,7 @@ State the resolved service URL and host service id in one line before running ch
 
 If the host has a deploy API (Render, Vercel, Netlify, etc.):
 - Latest deploy status is `live` / ready.
-- The deployed commit SHA matches the repo's `origin/main` HEAD (or the commit `/release` reported pushing). A live-but-stale deploy is a FAIL, not a pass.
+- The deployed commit SHA matches the remote base branch HEAD. Compare against the authoritative remote (`git ls-remote origin <base>` | first field), NOT the local `origin/main` remote-tracking ref, which is only as fresh as the last `git fetch` and can produce a false PASS or FAIL. The commit `/release` reported pushing also works. A live-but-stale deploy is a FAIL, not a pass.
 - Host gotcha (Render): deploy GET responses can contain raw `\n`; parse leniently.
 
 If the project has no deploy API, verify via whatever the host exposes, or skip with an explicit "deploy-match check skipped, no API" line. Never silently skip.
@@ -35,7 +35,7 @@ All plain GETs with a short timeout (10s), no auth secrets in command lines or o
 
 1. **Health / homepage**: the health endpoint if the project has one, else `/`. Expect 200.
 2. **Key endpoints**: 2-4 user-facing routes that matter to users (not admin). Expect 200 (or the documented redirect). If the project notes list none, test `/` plus the login page and note that the project should name its smoke routes.
-3. **Auth page loads**: the login route returns 200, if the app has one.
+3. **Auth page loads**: the login route returns 200, or a documented auth redirect (302 to an SSO / identity provider), if the app has one. A hard-200 expectation false-FAILs services that front login with SSO.
 4. **DEBUG is off** (framework-dependent, e.g. Django): a bogus URL (`/__smoke_bogus_404__/`) returns a plain 404, not a framework debug page. A debug page in prod is a FAIL with a security flag.
 5. **Released feature spot-check** (when run right after /release): if the release had a user-visible change with a checkable signature (a new route, a changed response field, a new static asset version), verify it is actually serving. This catches "deploy live but feature missing".
 

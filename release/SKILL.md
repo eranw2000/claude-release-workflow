@@ -15,13 +15,15 @@ For the **iterate / checkpoint stage** (open a PR for local testing, no merge, n
 Inspect the repo state and pick the path. Run:
 
 ```bash
+BASE=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+BASE=${BASE:-main}   # resolve the real base branch; do NOT assume main
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-echo "branch=$CURRENT_BRANCH"
+echo "branch=$CURRENT_BRANCH base=$BASE"
 git status --porcelain
-gh pr list --base main --state open --json number,title,headRefName,isDraft 2>/dev/null
+gh pr list --base "$BASE" --state open --json number,title,headRefName,isDraft 2>/dev/null
 ```
 
-Decide which of these you are in:
+Use `$BASE` everywhere below instead of a literal `main` (querying `--base main` on a `master`/`develop` repo returns nothing, so a real open PR would be misread as "nothing to ship"). Decide which of these you are in:
 
 **Path A: PR mode (one or more open PRs targeting main):**
 - There are open non-draft PRs against `main`.
@@ -61,11 +63,13 @@ For each PR's head branch, check for a review-notes file (e.g. `COMMENTS.md`) wi
 
 ### A4. Merge each PR
 
+**Pre-merge preflight:** `gh pr merge` merges on the remote immediately, so run the harness-files protection check from `~/.claude/skills/_shared/harness-files-protection.md` against the PR's head branch BEFORE merging, not after. If the base repo (origin) is a remote you do not own and any harness file is tracked, STOP here: a merge cannot be undone as cleanly as a withheld push. Fix the tracked files first, then merge.
+
 ```bash
 gh pr merge <number> --squash   # or --merge per project convention
 ```
 
-Then `git checkout main && git pull` to sync local main with the new state.
+Then `git checkout "$BASE" && git pull` to sync your local base branch with the new state.
 
 ### A5. Update docs on main
 
@@ -117,7 +121,17 @@ Commit the docs (separate commit is fine: `docs: README and notes for <change-na
 
 **Preflight (mandatory):** before any push, run the harness-files protection check from `~/.claude/skills/_shared/harness-files-protection.md`. For every remote you do not own personally, verify that no Claude / AI-assistant harness files (`CLAUDE.md`, `MEMORY.md`, `AGENTS.md`, `.claude/`, etc.) are tracked, and that `.gitignore` covers the full set. If any harness file is tracked on a client remote, STOP the push and surface the file list. Never push harness files to a repo you do not own.
 
-Push to every remote in `git remote -v` (origin, company, client fork, etc.). If a push is rejected, fetch + rebase and retry. Report the result of each.
+Push to every remote in `git remote -v` (origin, company, client fork, etc.). Report the result of each.
+
+**This push targets the base branch, so it trips the `block-git-push-main.sh` guard hook if you installed it.** That is expected here (this is the sanctioned release path). Append the documented marker so the hook lets it through:
+
+```bash
+git push origin "$BASE" #allow-push-main
+```
+
+Keep the marker unquoted and after the args (quoting it makes git read it as a refspec). If your harness has a separate policy layer that still blocks the push, run the push yourself rather than fighting it.
+
+If a push is rejected because the remote moved, fetch + rebase and retry. A rebased branch needs `git push --force-with-lease` (never a plain `--force`); on the base branch, only do this if you are certain no one else pushed, otherwise stop and surface it.
 
 ### 3. Verify auto-deploy
 
@@ -128,7 +142,7 @@ If the project auto-deploys on push to main:
 
 ### 4. Rebuild local Docker
 
-Follow `~/.claude/skills/_shared/local-docker-rebuild.md`: rebuild from the freshly-merged main so localhost matches prod. Skips silently if the project does not use Docker.
+Follow `~/.claude/skills/_shared/local-docker-rebuild.md`: rebuild from the current base branch so localhost matches prod. Skips silently if the project does not use Docker.
 
 ### 5. Final report
 
@@ -143,7 +157,7 @@ Single status block:
 
 ## Guardrails
 
-- Never force-push unless explicitly asked.
+- Never force-push unless explicitly asked. The one carve-out: retrying a rejected FEATURE-branch push after a rebase may use `--force-with-lease` (never plain `--force`). This never applies to the base branch.
 - Never amend a published commit. Create a new commit.
 - Never skip hooks with `--no-verify`.
 - Never `gh pr merge --admin` (bypassing branch protection) unless explicitly asked.
