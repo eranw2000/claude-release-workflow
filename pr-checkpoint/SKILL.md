@@ -1,4 +1,5 @@
 ---
+model: opus
 name: pr-checkpoint
 description: Snapshot in-progress work as a GitHub PR and rebuild the local Docker container so you can test the feature branch on localhost. Does NOT merge, does NOT touch production, does NOT update README or project notes (premature, that happens at /release time). Use when you want to capture a checkpoint of feature work, open a PR for review, and test locally before deciding it's ready to ship. Triggers on "checkpoint", "open a PR", "draft a PR", "snapshot this", "let me test this locally".
 ---

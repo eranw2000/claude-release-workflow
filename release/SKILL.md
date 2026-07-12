@@ -1,4 +1,5 @@
 ---
+model: opus
 name: release
 description: Ship to production. The single "ship it" verb for any project: handles both PR mode (merges open PRs targeting main) and trunk mode (commits straight to main). Updates README.md + project notes, pushes to all remotes, verifies the auto-deploy (Render / Vercel / etc.), and rebuilds the local Docker container so localhost matches prod. Triggers on "release", "ship it", "deploy", "ship to prod", "merge and release", "push to prod".
 argument-hint: "[optional commit message override]"

@@ -102,3 +102,13 @@ The deploy-verification and smoke steps are written host-agnostic with Render, V
 ## License
 
 MIT. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Everything here is original to this project.
+
+## Model routing
+
+The skills in this pack pin a Claude Code model alias in their frontmatter, so each artifact runs on the tier its work needs:
+
+- `model: fable`: planning and judgment-heavy review
+- `model: opus`: execution and content work
+- `model: sonnet`: routine or mechanical steps
+
+If a pinned model is not available on your plan, or you prefer different routing, edit the `model:` line in the artifact's frontmatter, or delete it to inherit your session model.
