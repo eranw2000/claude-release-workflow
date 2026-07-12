@@ -1,4 +1,5 @@
 ---
+model: sonnet
 name: production-smoke
 description: Post-deploy smoke test of a live production service. Verifies the deploy landed (live commit matches what /release pushed), hits the health endpoint and 2-4 key user-facing endpoints, checks the DEBUG-off 404 behavior, and scans recent host logs for tracebacks and 5xx. Read-only, never mutates the service; reports pass/fail per check and recommends rollback or fix-forward on failure. Use after /release, or when the user says "production smoke", "smoke test prod", "verify the deploy", "is prod healthy", "check the live site after the release".
 disable-model-invocation: false
