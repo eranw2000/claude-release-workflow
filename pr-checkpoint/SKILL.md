@@ -128,6 +128,8 @@ Capture the PR URL (the new one, or `$EXISTING`).
 
 This step pairs with a companion set of review agents (a code-quality reviewer, a pre-ship deploy guard, and a test-runner / PR validator). If you have them installed, spawn them and collect their reports. These are advisory: a checkpoint is the iterate stage, so **no finding from any of them refuses, blocks, or rolls back the PR**. The hard gate is `/release`.
 
+Run this step as the `review-round` skill (shipped in this pack) in **checkpoint mode** (`~/.claude/skills/review-round/SKILL.md`): author a per-agent adversarial prompt that names the 2-3 riskiest spots in this diff (a generic "review this diff" prompt is a protocol violation), launch the agents in one message, and post a PR comment ending `Review-round verdict: <CLEAN|CRITICALS-OPEN> @ <sha>` that `/release` reads. The fix loop stays optional at a checkpoint; the advisory rules below are LOCAL to this skill and always hold here, regardless of any future review-round edit.
+
 Launch the agents in a single message so they run in parallel (they are independent). Each agent reads the branch itself (`git diff "$BASE"...HEAD`, `gh pr view` / `gh pr diff`). Tell each one this is a checkpoint, not a release, so it reports rather than gates.
 
 Handle their results as advice only:
