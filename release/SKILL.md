@@ -62,6 +62,24 @@ If there are 2+ PRs, ask which to merge (default: all). One PR, proceed.
 
 For each PR's head branch, check for a review-notes file (e.g. `COMMENTS.md`) with unresolved blockers. If any exist, list them and stop.
 
+Also read each selected PR's latest `Review-round verdict:` comment (posted by the
+`review-round` skill, which owns the marker string; this skill reads it verbatim):
+
+```bash
+gh pr view <number> --json comments -q '[.comments[].body | select(contains("Review-round verdict:"))] | last'
+HEAD_SHA=$(gh pr view <number> --json headRefOid -q .headRefOid)
+```
+
+- Take the marker from the LAST line of the most recent comment carrying it, and
+  compare its `@ <sha>` to the PR's current head. A SHA mismatch is treated exactly
+  like NO comment (a stale CLEAN must not certify commits pushed after the review,
+  and a stale CRITICALS-OPEN must not block a fixed head).
+- `Review-round verdict: CRITICALS-OPEN @ <current-head-sha>`: treat like the
+  review-notes blockers above. Stop, list the open Criticals from that comment, and
+  offer to re-run `/review-round` or proceed only on an explicit override.
+- NO verdict comment (or only stale ones): NOT a blocker; proceed. The gate binds
+  only when a verdict exists for the exact head being merged.
+
 ### A4. Merge each PR
 
 **Pre-merge preflight:** `gh pr merge` merges on the remote immediately, so run the harness-files protection check from `~/.claude/skills/_shared/harness-files-protection.md` against the PR's head branch BEFORE merging, not after. If the base repo (origin) is a remote you do not own and any harness file is tracked, STOP here: a merge cannot be undone as cleanly as a withheld push. Fix the tracked files first, then merge.
@@ -69,6 +87,11 @@ For each PR's head branch, check for a review-notes file (e.g. `COMMENTS.md`) wi
 ```bash
 gh pr merge <number> --squash   # or --merge per project convention
 ```
+
+Background-session note: `gh pr comment` / `gh pr merge` can be blocked by the
+auto-mode classifier on agent-authored PRs. A transient stage-2 classifier error
+gets ONE plain retry; a sustained block means asking the user to switch the session
+to manual mode (or run the command themselves), not fighting it.
 
 Then `git checkout "$BASE" && git pull` to sync your local base branch with the new state.
 
@@ -164,6 +187,9 @@ Single status block:
 - Never `gh pr merge --admin` (bypassing branch protection) unless explicitly asked.
 - README and project-notes updates are part of this release, not a follow-up.
 - Refuse to release with unresolved blockers in any selected PR's review-notes file.
+- Refuse to merge a PR whose `Review-round verdict:` at the CURRENT head is
+  CRITICALS-OPEN, absent an explicit override. A missing or stale-SHA verdict is not
+  a blocker; this skill never runs the reviewers itself.
 - Refuse to commit secrets or `.env` files.
 - Refuse to push Claude / AI-assistant harness files (`CLAUDE.md`, `MEMORY.md`, `AGENTS.md`, `.claude/`, `.cursor*`, `.aider*`, `.windsurf*`, `.github/copilot-instructions.md`) to any remote you do not own. See `~/.claude/skills/_shared/harness-files-protection.md`.
 - Docker rebuild is best-effort: a failure here must NOT roll back the git push / merge. Report and continue.
