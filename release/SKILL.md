@@ -74,11 +74,42 @@ HEAD_SHA=$(gh pr view <number> --json headRefOid -q .headRefOid)
   compare its `@ <sha>` to the PR's current head. A SHA mismatch is treated exactly
   like NO comment (a stale CLEAN must not certify commits pushed after the review,
   and a stale CRITICALS-OPEN must not block a fixed head).
+- `Review-round verdict: CLEAN @ <current-head-sha>`: the ONLY value that
+  certifies. It means a completed round, every Critical and Blocker resolved or
+  declined, full suite green.
 - `Review-round verdict: CRITICALS-OPEN @ <current-head-sha>`: treat like the
   review-notes blockers above. Stop, list the open Criticals from that comment, and
   offer to re-run `/review-round` or proceed only on an explicit override.
-- NO verdict comment (or only stale ones): NOT a blocker; proceed. The gate binds
-  only when a verdict exists for the exact head being merged.
+- `Review-round verdict: CHECKPOINT-ADVISORY @ <current-head-sha>`: a checkpoint
+  round is advisory by contract and its fix loop is optional, so nothing here was
+  certified. Surface it and wait for an explicit go-ahead, exactly as for an absent
+  verdict below.
+- **Anything else, including a value this list does not name: treat as no verdict.**
+  Permit on an exact `CLEAN` and stop on everything else. Do not read an
+  unrecognised value as certified, and do not guess what a new one meant. This is
+  the direction that matters: a gate that lists what to REFUSE lets every value
+  nobody thought of through, and the value nobody thought of is the one a future
+  edit introduces.
+- NO verdict comment, or only stale ones: **STOP and surface it, then proceed only
+  on an explicit go-ahead.** This is not a blocker and never becomes one, but it
+  must never be silent. Print the PR number, its size
+  (`--json additions,deletions,changedFiles`), whether the diff touches a migration
+  or a deploy-shaped file, and which case it is:
+  - `no Review-round verdict comment exists for this PR`
+  - `the only verdict is stale: <sha-in-comment> vs head <current-head>`
+  - `the only verdict is an advisory checkpoint one, which certifies nothing`
+  - `the verdict value <value> is not one this gate recognises`
+
+  then say plainly that nothing has certified this head, and wait.
+
+  Why this is not silent: the two halves of this contract are self-reported and
+  nothing reconciles them. `review-round` is told to post, this skill reads what is
+  there, and `gh pr comment` can fail. A real round whose comment never landed
+  therefore looks exactly like a PR nobody reviewed, and the release report reads
+  the same either way. Absence of evidence is the one state that looks like
+  success, so it gets said out loud. A missing verdict is legitimate and common (a
+  docs-only fix, a one-line revert): surfacing it costs one confirmation, and not
+  surfacing it costs an unreviewed production merge nobody notices.
 
 ### A4. Merge each PR
 
@@ -188,8 +219,10 @@ Single status block:
 - README and project-notes updates are part of this release, not a follow-up.
 - Refuse to release with unresolved blockers in any selected PR's review-notes file.
 - Refuse to merge a PR whose `Review-round verdict:` at the CURRENT head is
-  CRITICALS-OPEN, absent an explicit override. A missing or stale-SHA verdict is not
-  a blocker; this skill never runs the reviewers itself.
+  CRITICALS-OPEN, absent an explicit override. Only an exact `CLEAN` at the current
+  head certifies; a missing, stale, advisory-checkpoint or unrecognised verdict is
+  not a blocker, but it is never silent: surface it and wait for an explicit
+  go-ahead (step A3). This skill never runs the reviewers itself.
 - Refuse to commit secrets or `.env` files.
 - Refuse to push Claude / AI-assistant harness files (`CLAUDE.md`, `MEMORY.md`, `AGENTS.md`, `.claude/`, `.cursor*`, `.aider*`, `.windsurf*`, `.github/copilot-instructions.md`) to any remote you do not own. See `~/.claude/skills/_shared/harness-files-protection.md`.
 - Docker rebuild is best-effort: a failure here must NOT roll back the git push / merge. Report and continue.
