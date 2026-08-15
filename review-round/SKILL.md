@@ -22,7 +22,9 @@ implementation session, switch explicitly with `/model opus`.
   formally declined before the verdict posts.
 - **Checkpoint mode** (invoked from `/pr-checkpoint` step 6): steps 1-3 and 8 always;
   the fix loop (4-7) is optional and NOTHING blocks the PR. The checkpoint stays
-  advisory by design; the hard gate is `/release`.
+  advisory by design; the hard gate is `/release`. Its step-8 verdict says
+  `CHECKPOINT-ADVISORY`, never `CLEAN`, so the mode is visible to the gate that
+  reads it later. See step 8 for why the two must not share a word.
 
 ## The loop
 
@@ -90,12 +92,37 @@ One PR comment (`gh pr comment`) containing:
 - The machine-readable LAST line, exactly one of:
   - `Review-round verdict: CLEAN @ <reviewed-HEAD-sha>`
   - `Review-round verdict: CRITICALS-OPEN @ <reviewed-HEAD-sha>`
+  - `Review-round verdict: CHECKPOINT-ADVISORY @ <reviewed-HEAD-sha>`
+
+**Which value, and this is the part that is easy to get wrong.** `CLEAN` means a
+COMPLETED round: every Critical and Blocker was driven to Fixed or Declined, and
+the full suite was re-run green. It is a certification, and `/release` treats it
+as one.
+
+**In checkpoint mode you may not post `CLEAN`.** Post `CHECKPOINT-ADVISORY`
+instead whenever the round found nothing blocking. A checkpoint's findings are
+advisory by contract and its fix loop is optional, so "nothing blocked a
+checkpoint" is a much weaker claim than "everything was resolved" and must not
+wear the same word. `CRITICALS-OPEN` is unchanged and correct in either mode: if
+a checkpoint round finds an unresolved Critical, saying so should stop a later
+release, and it does.
+
+The one thing that makes this a gate rather than a convention: a round that ends
+without completing, because it was interrupted, ran out of budget, or stopped to
+ask a question nobody answered, leaves whatever it last posted standing. If that
+was `CLEAN`, the PR now carries a certification nobody earned.
+`CHECKPOINT-ADVISORY` fails safe there, because the release gate stops on it and
+asks.
 
 This marker string is OWNED by review-round; `/release` reads it verbatim and
 compares the SHA to the PR head at release time. The SHA binding is load-bearing:
-without it, a CLEAN posted at checkpoint time would silently certify commits pushed
-AFTER the review. If you fixed anything in steps 4-7, the reviewed SHA is the
-post-fix HEAD you re-ran the suite on; push first, then post.
+without it, a verdict posted at checkpoint time would silently certify commits
+pushed AFTER the review. If you fixed anything in steps 4-7, the reviewed SHA is
+the post-fix HEAD you re-ran the suite on; push first, then post.
+
+Adding a fourth value is allowed, but it lands in `/release`'s A3 in the same
+change or it is inert: that reader permits on `CLEAN` alone and stops on anything
+else, so a new value stops releases until A3 learns it.
 
 ## Background-session note
 
