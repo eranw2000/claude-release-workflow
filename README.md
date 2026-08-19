@@ -38,7 +38,7 @@ Shared protocols the skills reference (in `_shared/`):
 
 The hooks (in `hooks/`):
 
-- **`block-git-push-main.sh`**: PreToolUse hook on the Bash tool that blocks `git push` to main / master, with two documented bypasses for the rare direct-push case.
+- **`block-git-push-main.sh`**: PreToolUse hook on the Bash tool that blocks `git push` to main / master, with two documented bypasses for the rare direct-push case. It is a thin delegator to `block-git-push-main.py`, which decides from a quote-aware parse of the command (`_bash_command_parse.py`) rather than from a substring match. The parse matters in both directions: a substring match blocks a quoted grep pattern, a heredoc that writes a script containing a push line, and prose that ends one word after "push", while it lets `bash -c "git push origin main"` and `git push origin HEAD:refs/heads/main` straight through.
 - **`test-integrity-check.py`**: PostToolUse hook (advisory) that catches DEAD tests (defined after a custom `if __name__ == "__main__"` runner, so they never bind) and UNREGISTERED tests (missing from a hand-maintained call list). Both read as green from the outside; this hook flags them deterministically via AST. It also runs standalone as `test-integrity-check.py --file <path>` for a one-shot audit. `_bash_write_targets.py` is its helper: it lets the Bash matcher see files written by shell redirection or `tee`, which normal Write/Edit hooks miss.
 
 ## Install
@@ -55,7 +55,8 @@ cp _shared/*.md ~/.claude/skills/_shared/
 
 # 2. Hooks -> ~/.claude/hooks/
 mkdir -p ~/.claude/hooks
-cp hooks/block-git-push-main.sh hooks/test-integrity-check.py hooks/_bash_write_targets.py ~/.claude/hooks/
+cp hooks/block-git-push-main.sh hooks/block-git-push-main.py hooks/_bash_command_parse.py \
+   hooks/test-integrity-check.py hooks/_bash_write_targets.py ~/.claude/hooks/
 chmod +x ~/.claude/hooks/block-git-push-main.sh ~/.claude/hooks/test-integrity-check.py
 ```
 
