@@ -188,12 +188,33 @@ Keep the marker unquoted and after the args (quoting it makes git read it as a r
 
 If a push is rejected because the remote moved, fetch + rebase and retry. A rebased branch needs `git push --force-with-lease` (never a plain `--force`); on the base branch, only do this if you are certain no one else pushed, otherwise stop and surface it.
 
+**Then prove every MIRROR actually landed it. Mandatory whenever `git remote -v` shows more than one remote:**
+
+```bash
+ORIGIN=$(git ls-remote origin "refs/heads/$BASE" | cut -f1)
+for R in $(git remote | grep -v '^origin$'); do
+  THEIRS=$(git ls-remote "$R" "refs/heads/$BASE" | cut -f1)
+  [ "$THEIRS" = "$ORIGIN" ] && echo "OK   $R" || echo "BEHIND $R  $THEIRS != $ORIGIN"
+done
+```
+
+Read the LIVE ref, not the remote-tracking branch, which is only as fresh as your last
+fetch. Why this is not optional: step 3 confirms PRODUCTION is right, and nothing
+anywhere confirms a mirror. A mirror has nothing downstream of it, so it can sit behind
+for weeks with no symptom. One measured case ran two weeks. Where the lagging remote
+belongs to a client, check the gap for harness files and secrets before copying to it.
+
 ### 3. Verify auto-deploy
 
 If the project auto-deploys on push to main:
 - **Render**: wait briefly, then check the latest deploy status via the Render CLI or API. Confirm the deployed commit SHA matches the commit you just pushed, a live-but-stale deploy means the webhook missed and you should trigger a deploy manually. Surface the URL.
 - **Vercel / Netlify**: same, surface the deploy URL and status.
 - If no auto-deploy is configured, say so.
+
+A live-but-stale deploy (status live, commit mismatch) is a FAILED release, not a passed
+one. Report it as such and either trigger the deploy manually or stop. Checking `status:
+live` alone cannot see this: the webhook can miss a push while the host keeps serving the
+old commit and still reports the old deploy as live.
 
 ### 4. Rebuild local Docker
 
@@ -204,9 +225,15 @@ Follow `~/.claude/skills/_shared/local-docker-rebuild.md`: rebuild from the curr
 Single status block:
 - Path taken (A merge / B trunk push)
 - For path A: which PRs were merged + their numbers
+- **Verdict status per merged PR**, one of: `CLEAN @ <sha>`, `no verdict comment
+  (proceeded on your go-ahead)`, or `stale verdict <sha> vs head <sha> (proceeded on
+  your go-ahead)`. This line is mandatory and never omitted. Leaving it out is how an
+  unreviewed merge came to read exactly like a reviewed one.
 - Commit hash(es) on main
 - Which remotes were updated
-- Deploy verification: host URL + status + commit-match result
+- **Mirror parity**: the per-remote result above, or `single remote, not applicable`
+- Deploy verification: host URL + status + `live-commit == pushed-commit` result (name
+  both SHAs if they differ)
 - Docker rebuild result line
 - Clean working tree confirmed
 
