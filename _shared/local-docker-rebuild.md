@@ -1,11 +1,9 @@
 ---
 name: local-docker-rebuild (shared)
-purpose: Detect whether a local Docker container is running for the current repo and rebuild it from the working tree. Used by /pr-checkpoint (rebuild from the feature branch for local testing) and /release (rebuild after deploy so localhost matches prod).
+purpose: Detect if a local Docker container is running for the current repo and rebuild it from the working tree. Used by /pr-checkpoint (rebuild from feature branch for local testing) and /release (rebuild after prod deploy to keep localhost matching prod).
 ---
 
 # Local Docker rebuild protocol
-
-This step is optional. It only does something if the repo runs locally in Docker. If your project does not use Docker, the caller skips this silently.
 
 ## When to skip silently
 
@@ -17,7 +15,7 @@ If `docker` is not installed or the daemon is not running, skip this step silent
 
 ## Resolve the repo dir first
 
-The session working directory is often not the code repo (it can be a separate data dir), so resolve the repo root before any detection and run every command from there:
+The session working directory is often not the code repo (it can be the `.claude` data dir), so resolve the repo root before any detection and run every command from there:
 
 ```bash
 REPO=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null) || REPO="$PWD"
@@ -28,14 +26,14 @@ cd "$REPO"
 
 1. **Compose file in repo root**: look for `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, or `compose.yaml`.
 2. **Compose project up**: from the repo dir, run `docker compose ps --status running --quiet 2>/dev/null` (the `--status` flag needs Compose v2; the redirect keeps an older Compose from erroring the detection). If it returns container IDs, this repo IS running locally via compose.
-3. **Fallback (no compose)**: if there is a `Dockerfile` but no compose file, run `docker ps --format '{{.Names}}\t{{.Image}}'` and match by image or container name containing the repo basename (case-insensitive).
+3. **Fallback (no compose)**: if there's a `Dockerfile` but no compose file, run `docker ps --format '{{.Names}}\t{{.Image}}'` and match by image or container name containing the repo basename (case-insensitive).
 
-If nothing is detected, say so in one line and move on. Do NOT start a stopped container that was not running before, only update what was already live.
+If nothing is detected, say so in one line and move on. Do NOT start a stopped container that wasn't running before; only update what was already live.
 
 ## Rebuild
 
 - **Compose case**: from the repo dir, run `docker compose up -d --build`. Only changed services restart; bind-mounted code is picked up automatically.
-- **Non-compose fallback**: rebuild the image with `docker build -t <existing-image-tag> .` then `docker restart <container-name>`. If the existing run command is not recoverable from `docker inspect`, report what you found and ask before recreating.
+- **Non-compose fallback**: rebuild the image with `docker build -t <existing-image-tag> .` then `docker restart <container-name>`. If the existing run command isn't recoverable from `docker inspect`, report what you found and ask before recreating.
 
 ## Verify
 
@@ -49,4 +47,4 @@ Report the result in one line:
 - `rebuilt and restarted: <container/service name>, status=Up`
 - `no local container found for this repo, skipped`
 - `Docker not running, skipped`
-- On error: `Docker rebuild failed: <reason>`, but do NOT roll back the caller (the PR / push already happened).
+- On error: `Docker rebuild failed: <reason>`, but do NOT roll back the caller (PR / push already happened).

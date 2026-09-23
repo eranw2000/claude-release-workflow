@@ -7,7 +7,6 @@ The idea is a small, repeatable path from a feature branch to a verified product
 1. **pr-checkpoint**: snapshot in-progress work as a GitHub PR and rebuild your local Docker container so you can test the feature branch on localhost. Does not merge, does not touch prod. Optionally runs the review loop as advisory reports.
 2. **review-round**: the codified three-reviewer loop. Author per-agent adversarial prompts aimed at the riskiest spots, launch the review agents in parallel, reproduce every finding by execution before fixing, prove each fix with a non-vacuous regression test, and post the PR verdict comment that `release` reads.
 3. **release**: the single ship-it verb. Auto-detects PR mode (merge open PRs targeting main) or trunk mode (commit straight to main), updates the README and project notes, pushes to every remote, verifies the auto-deploy landed on the right commit, and rebuilds local Docker so localhost matches prod. Refuses to merge a PR whose review-round verdict at the current head is CRITICALS-OPEN.
-4. **production-smoke**: a read-only check battery against the live service after a deploy: confirms the deployed commit matches what you pushed, hits the health endpoint and a few key routes, checks that debug mode is off in prod, and scans recent logs for tracebacks and 5xx.
 
 A `block-git-push-main.sh` PreToolUse hook backs this up: it deterministically blocks any raw `git push` to `main` / `master` and points you at `/release`. It is the safety net for when the model forgets the workflow.
 
@@ -28,7 +27,6 @@ Source: [docs/release-flow.drawio](docs/release-flow.drawio) (editable in draw.i
 - **`pr-checkpoint`**: commit staged work, push the feature branch, open a draft PR with a structured body, optionally run the advisory review loop, and rebuild local Docker. Refuses to push to main or commit secrets, and (via the shared preflight) refuses to push AI-assistant harness files to a repo you do not own.
 - **`review-round`**: the pre-release review loop (also the engine behind the `pr-checkpoint` step-6 review, in advisory checkpoint mode). Scopes the diff, authors adversarial per-agent prompts, launches the review agents in parallel, reproduces findings by execution, verifies suggested fixes against the authoritative gate, proves each fix with a mutation- or contrast-checked regression test, and posts a `Review-round verdict: <CLEAN|CRITICALS-OPEN> @ <sha>` comment. `release` reads that marker and refuses a CRITICALS-OPEN head.
 - **`release`**: detects the release shape (PR / trunk / nothing to do), merges or commits, runs an optional project pre-push gate, updates README + project notes, pushes to all remotes, verifies the deploy landed on the correct commit, and rebuilds local Docker. Refuses to merge a PR whose review-round verdict at the current head is CRITICALS-OPEN (a missing or stale-SHA verdict is not a blocker).
-- **`production-smoke`**: post-deploy verification. Strictly read-only (GETs, log reads, host-API reads). Reports pass / fail per check and recommends rollback or fix-forward on failure without executing either on its own.
 
 Shared protocols the skills reference (in `_shared/`):
 
@@ -47,11 +45,12 @@ Copy the skill directories, the shared protocols, and the hook into your Claude 
 
 ```bash
 # 1. Skills + shared protocols -> ~/.claude/skills/
-for d in pr-checkpoint review-round release production-smoke; do
+for d in pr-checkpoint review-round release; do
   cp -R "$d" ~/.claude/skills/
 done
 mkdir -p ~/.claude/skills/_shared
-cp _shared/*.md ~/.claude/skills/_shared/
+cp _shared/*.md _shared/security-scan.sh ~/.claude/skills/_shared/
+chmod +x ~/.claude/skills/_shared/security-scan.sh ~/.claude/skills/release/sync-remotes.sh
 
 # 2. Hooks -> ~/.claude/hooks/
 mkdir -p ~/.claude/hooks
@@ -104,16 +103,16 @@ The harness-file preflight needs to know which remotes are "yours". Open `~/.cla
 ## Companions (not bundled)
 
 - **Review agents.** The `review-round` skill (and the `pr-checkpoint` step-6 review it powers) drives a separate set of agents published at [claude-review-agents](https://github.com/eranw2000/claude-review-agents) (a code reviewer, a pre-ship deploy guard, and a test-runner / PR validator). Install those for the review loop to do something, or plug in your own. Without them, the checkpoint just skips the review.
-- **A project notes file.** The `release` and `production-smoke` skills read and write a project working-notes file for context (schema changes, service IDs, gotchas). For Claude Code that is usually a `CLAUDE.md`; adapt to whatever your project keeps. If your project has none, the docs step still updates the README and skips the notes.
+- **Security scan step (optional).** `/release` runs `_shared/security-scan.sh` on the diff it is about to ship. It needs `semgrep` and `osv-scanner` on your `PATH`, and the rule files from the [secure-dev-guardrails](https://github.com/eranw2000/secure-dev-guardrails) pack: copy its `standards/` folder to `~/.claude/skills/_shared/security-standards/`, or point `SECURITY_SCAN_BASELINE` at its `baseline.yml`. When a tool is missing the scan says it could not run (exit 2) rather than reporting a clean result.
+- **A project notes file.** The `release` skill reads and writes a project working-notes file for context (schema changes, service IDs, gotchas). For Claude Code that is usually a `CLAUDE.md`; adapt to whatever your project keeps. If your project has none, the docs step still updates the README and skips the notes.
 
 ## Host support
 
-The deploy-verification and smoke steps are written host-agnostic with Render, Vercel, and Netlify as worked examples. The core check is the same everywhere: after a push to main, confirm the live deploy is serving the exact commit you pushed, not a stale one. A live-but-stale deploy is a failure, not a pass. If your host has no deploy API, the skills say so explicitly rather than reporting a false green.
+The deploy-verification step is written host-agnostic with Render, Vercel, and Netlify as worked examples. The core check is the same everywhere: after a push to main, confirm the live deploy is serving the exact commit you pushed, not a stale one. A live-but-stale deploy is a failure, not a pass. If your host has no deploy API, the skill says so explicitly rather than reporting a false green.
 
 ## Conventions baked in
 
 - Two verbs, one gate: iterating is cheap and repeatable (`/pr-checkpoint`); shipping is a single atomic action (`/release`) that always updates docs and verifies the deploy.
-- Read-only means read-only: `/production-smoke` never mutates the service. On failure it recommends; you decide.
 - Secrets and assistant harness files never leave your own repos, enforced by a preflight on every push.
 - Writing follows plain-prose conventions: no em dashes, no marketing adjectives, no Unicode box-drawing characters in tables.
 
@@ -125,7 +124,7 @@ MIT. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Everything here is original to
 
 The skills in this pack pin a Claude Code model alias in their frontmatter, so each artifact runs on the tier its work needs:
 
-- `model: fable`: planning and judgment-heavy review
+- `model: inherit`: planning and judgment-heavy review. These run on your session model, so start a planning or review session on your strongest model (switch with `/model`).
 - `model: opus`: execution and content work
 - `model: sonnet`: routine or mechanical steps
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Shared parser: which files does a Bash command WRITE via redirection or tee?
 
-Used by the PostToolUse ^Bash$ branch of test-integrity-check.py (and any other
-Bash-write hook). Exists because Edit/Write hooks never fire on shell writes
-(heredocs, `>`/`>>`, tee): that blind spot is exactly how dead tests get
-appended with `cat >>`.
+Used by the PostToolUse ^Bash$ branches of test-integrity-check.py and
+ai-signal-check.py. Exists because Edit/Write hooks never fire on shell
+writes (heredocs, `>`/`>>`, tee): that blind spot is exactly how dead tests
+were appended with `cat >>` on 2026-07-17.
 
 Rules of the road (advisory hooks, so precision beats recall):
 - Heredoc BODIES are stripped before scanning, so a heredoc that writes a
@@ -14,7 +14,7 @@ Rules of the road (advisory hooks, so precision beats recall):
   then the hook envelope's cwd. A candidate that does not exist on disk is
   DROPPED, not guessed at: PostToolUse fires after a successful write, so
   the real target exists. Degrading silently is deliberate.
-- Python 3.9 compatible (the system python3 may be older than 3.10).
+- Python 3.9 compatible (the system python3 may be Xcode's 3.9).
 """
 
 import os
@@ -51,6 +51,74 @@ def strip_heredocs(command):
     if current is not None:  # unterminated heredoc: rest of command is body
         bodies.append("\n".join(current))
     return "\n".join(kept), bodies
+
+
+def heredoc_bodies_by_target(command, cwd=None):
+    """Pair each heredoc BODY with the file its OWN opener line redirects to.
+
+    Returns [(target_or_None, body)]. A body whose opener line carries no
+    redirect (`python3 - <<'PY'`) gets None, because it is a script fed to a
+    program and is not written anywhere.
+
+    Exists because a caller that scans written CONTENT has to know which file
+    the content went to. Concatenating every body and blaming every target
+    makes a verifier heredoc in the same call look like part of the document
+    it verifies, which is how ai-signal-check warned twice about clean files
+    on 2026-09-01.
+    """
+    cd_dir = None
+    m = _CD_PREFIX.match(command)
+    if m:
+        cd_dir = _expand(m.group(1) or m.group(2) or m.group(3))
+        if not os.path.isabs(cd_dir) and cwd:
+            cd_dir = os.path.join(cwd, cd_dir)
+
+    def _line_target(line):
+        raw = []
+        for r in _REDIRECT.finditer(line):
+            raw.append(r.group(1))
+        for r in _TEE.finditer(line):
+            for tok in r.group(1).split():
+                if tok.startswith("-"):
+                    continue
+                if tok in ("<", ">", ">>"):
+                    break
+                raw.append(tok)
+        for tok in raw:
+            tok = _clean_token(tok)
+            if not tok or tok.startswith(("&", "(", "$(")):
+                continue
+            resolved = _resolve(tok, cd_dir, cwd)
+            if resolved and not resolved.startswith("/dev/"):
+                return resolved
+        return None
+
+    pairs = []
+    queue = []      # (delimiter, strip_leading_tabs, target) awaiting a body
+    current = None
+    pending = None  # target of the heredoc currently being collected
+    for line in command.split("\n"):
+        if queue:
+            delim, strip_tabs, target = queue[0]
+            probe = line.lstrip("\t") if strip_tabs else line
+            if probe == delim:
+                pairs.append((target, "\n".join(current or [])))
+                current = None
+                queue.pop(0)
+            else:
+                if current is None:
+                    current = []
+                    pending = target
+                current.append(line)
+            continue
+        opens = list(_HEREDOC_OPEN.finditer(line))
+        if opens:
+            target = _line_target(line)
+            for om in opens:
+                queue.append((om.group(3), om.group(1) == "-", target))
+    if current is not None:  # unterminated heredoc: rest of command is body
+        pairs.append((pending, "\n".join(current)))
+    return pairs
 
 
 def _clean_token(tok):

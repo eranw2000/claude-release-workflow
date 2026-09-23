@@ -9,7 +9,7 @@ on the same day, on the same command:
     grep -rniE 'remote|git push|ls-remote' <file> | head
 
 block-git-push-main.sh saw the words "git push" and called it a push.
-git-repo-target-guard.py split the text on "|", which cut INSIDE the quoted
+A second guard split the text on "|", which cut INSIDE the quoted
 pattern, so one piece began with "git push" and looked like a bare git command.
 
 Neither was a git command at all. The phrase was an argument to grep. Fixing
@@ -44,6 +44,11 @@ except Exception:                                       # pragma: no cover
 # Operator tokens that end one command and begin the next.
 OPERATORS = {";", "|", "||", "&&", "&", "(", ")", "\n"}
 
+# What shlex(punctuation_chars=True) uses, plus the newline. shlex groups a run
+# of these into ONE token, so `&&` followed by a newline arrives as `"&&\n"`;
+# the run test in split_segments accepts any such run rather than a fixed set.
+PUNCTUATION_CHARS = "();<>|&\n"
+
 # Shell keywords and wrappers that can sit in front of the real command word.
 PREFIXES = {
     "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for",
@@ -63,8 +68,21 @@ class UnparseableCommand(Exception):
 
 def tokenize(text):
     """Quote-aware token list. Operators come back as their own tokens."""
-    lex = shlex.shlex(text, posix=True, punctuation_chars=True)
+    lex = shlex.shlex(text, posix=True, punctuation_chars=PUNCTUATION_CHARS)
     lex.whitespace_split = True
+    # A newline ENDS a command, so it must come back as its own token. shlex
+    # counts it as ordinary whitespace by default, which silently welded two
+    # commands into one segment: `git status` newline `git push origin main`
+    # parsed as a single `git status` call with four extra arguments, and every
+    # guard built on this parser went quiet. Measured 2026-08-28 over this
+    # machine's own history, 180 of 649 real commits were invisible for it.
+    #
+    # Setting `whitespace` alone does NOT work and is worse than the bug: the
+    # newline then has no meaning at all and welds into the neighbouring word,
+    # giving the token `status\ngit`, so the second command's NAME disappears.
+    # It has to be a punctuation character, which is what emits it separately.
+    # \r stays whitespace so a CRLF command does not leave a stray \r behind.
+    lex.whitespace = " \t\r"
     try:
         return list(lex)
     except ValueError as exc:
@@ -75,7 +93,7 @@ def split_segments(tokens):
     """Split a token list into one token list per command."""
     segments, current = [], []
     for tok in tokens:
-        if tok in OPERATORS or (tok and all(c in "|&;" for c in tok)):
+        if tok in OPERATORS or (tok and all(c in "|&;\n" for c in tok)):
             if current:
                 segments.append(current)
                 current = []
@@ -182,3 +200,50 @@ def cd_target(tokens):
     if stripped and stripped[0] == "cd" and len(stripped) > 1:
         return stripped[1]
     return None
+
+
+def pipeline_stages(command):
+    """Pipelines in `command`, as lists of token-lists, one entry per pipeline.
+
+    `split_segments` deliberately discards the joining operator, so it cannot
+    tell `a | tail` from `a && tail`. This keeps the `|` boundaries, which is
+    what a check about output buffering needs: only the LAST stage of a
+    pipeline reaches the terminal, so only that stage decides whether the
+    earlier stages' output is visible while they are still running.
+
+    Heredoc bodies are stripped first, so a pipe written inside a generated
+    script is not read as a pipe belonging to this call.
+
+    Raises UnparseableCommand when the text cannot be tokenized.
+    """
+    scannable, _bodies = strip_heredocs(command)
+    tokens = tokenize(scannable)
+
+    pipelines, current, stage = [], [], []
+    for tok in tokens:
+        # A pipe at the END of a line still pipes: bash continues the pipeline
+        # onto the next line. shlex groups the run, so it arrives as "|\n" and
+        # a bare `== "|"` test would stop seeing it as a pipe at all.
+        is_pipe = bool(tok) and tok.replace("\n", "") == "|"
+        is_other_op = (not is_pipe) and (
+            tok in OPERATORS or (tok and all(c in "|&;\n" for c in tok))
+        )
+        if is_pipe:
+            if stage:
+                current.append(stage)
+                stage = []
+            continue
+        if is_other_op:
+            if stage:
+                current.append(stage)
+                stage = []
+            if len(current) > 1:
+                pipelines.append(current)
+            current = []
+            continue
+        stage.append(tok)
+    if stage:
+        current.append(stage)
+    if len(current) > 1:
+        pipelines.append(current)
+    return pipelines
