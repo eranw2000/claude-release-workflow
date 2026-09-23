@@ -130,16 +130,9 @@ CANDIDATE_SHA=$HEAD_SHA    # this iteration's candidate pin: what A3b scans and 
 
   then say plainly that nothing has certified this head, and wait.
 
-  Why this is not silent, from the incident that changed it on a real project: a
-  review round HAD run and its fixes were the PR's head
-  commit, but the comment was never posted, so this gate read the PR exactly as it
-  reads a wholly unreviewed one. 32 files and a data migration went to production
-  with the gate inert and the release report identical to a CLEAN merge. The two
-  halves of this contract are self-reported and nothing reconciles them: the
-  `review-round` skill is told to post, this skill is told absence is fine, and
-  `review-round` itself concedes the classifier can block `gh pr comment`. Absence
-  of evidence is the one state that looks the same as success, so it gets said out
-  loud.
+  Why this is not silent: a missing verdict reads exactly like an unreviewed PR,
+  and absence of evidence is the one state that looks the same as success, so it
+  gets said out loud.
 
   A missing verdict is legitimate and common (a docs-only fix, a one-line revert).
   Surfacing it costs one confirmation; not surfacing it costs an unreviewed
@@ -228,7 +221,7 @@ an unresolved blocking finding; a `[PRE-EXISTING]` one is named in the report in
 `path` glob, an `owner`, a `reason` and an `expires` date. The scan then prints how many it
 waived. Three things it deliberately refuses to honour, each reported out loud rather than
 silently: an entry past its expiry, an entry with no expiry at all, and an entry carrying
-only a `fingerprint`, since nothing in this harness emits one. If PyYAML is missing from
+only a `fingerprint` and no `path`. If PyYAML is missing from
 the interpreter, the scan says the register went unread and reports every finding rather
 than assuming there was nothing to waive.
 
