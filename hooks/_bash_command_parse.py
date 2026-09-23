@@ -122,6 +122,31 @@ WRAPPER_VALUE_FLAGS = {
 }
 
 
+def _env_split_string(head, flag, rest):
+    """For env's -S / --split-string, the words its string splits into, else None.
+
+    Consumes the value from `rest` when it is a separate token. A string the
+    tokenizer cannot read falls back to a whitespace split, so the command words
+    stay visible and no caller has to handle a new exception here.
+    """
+    if head != "env":
+        return None
+    if flag in ("-S", "--split-string"):
+        if not rest:
+            return None
+        value = rest.pop(0)
+    elif flag.startswith("--split-string="):
+        value = flag[len("--split-string="):]
+    elif flag.startswith("-S") and len(flag) > 2:
+        value = flag[2:]
+    else:
+        return None
+    try:
+        return tokenize(value)
+    except UnparseableCommand:
+        return value.split()
+
+
 def strip_prefixes(tokens):
     """Drop shell keywords, wrappers, their options and VAR=value assignments."""
     out = list(tokens)
@@ -134,6 +159,12 @@ def strip_prefixes(tokens):
                 flag = out.pop(0)
                 if flag == "--":
                     break
+                # `env -S 'git commit'` splits its string into the command words,
+                # so the string IS the command, and it is parsed as one.
+                split = _env_split_string(head, flag, out)
+                if split is not None:
+                    out = split + out
+                    continue
                 if flag in value_flags and out:
                     out.pop(0)
             continue

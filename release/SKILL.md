@@ -361,11 +361,11 @@ Follow `~/.claude/skills/_shared/release-docs.md`: write a real subsection expla
 
 Commit the docs (separate commit is fine: `docs: README and CLAUDE.md for <change-name>`).
 
-### 2. Push to all remotes
+### 2. Push to origin and its mirrors
 
 **Preflight (mandatory):** before any push, run the harness-files protection check from `~/.claude/skills/_shared/harness-files-protection.md`. For every remote you do not own personally, verify that no Claude / AI-assistant harness files (`CLAUDE.md`, `MEMORY.md`, `AGENTS.md`, `.claude/`, etc.) are tracked, and that `.gitignore` covers the full set. If any harness file is tracked on a client remote, STOP the push and surface the file list. Never push harness files to a repo you do not own.
 
-Push to every remote in `git remote -v` (origin, company, client fork, etc.). Report the result of each.
+Push to origin. Then push to each remote named in `git config --get-all release.mirror`, if there are any. Report the result of each. Never push to any other remote in `git remote -v` (an upstream, a fork, an archive).
 
 **This push targets the base branch, so it trips the `block-git-push-main.sh` guard hook.** That is expected here (this is the sanctioned release path). Append the documented marker to the push so the hook lets it through:
 

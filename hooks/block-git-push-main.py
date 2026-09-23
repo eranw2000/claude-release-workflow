@@ -136,6 +136,11 @@ REMOTE_NAME = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._/-]*$")
 
 RAW_COMMAND = ""
 
+# The raw-text fallback, used only once a parse has already failed. No distance
+# cap and it crosses newlines, so a long option or a continued line cannot carry
+# a push past it. Same shape as secret-scan-git.py's.
+LOOKS_LIKE_PUSH_RE = re.compile(r"\bgit\b[\s\S]*?\bpush\b")
+
 # (directory, remote) -> branch name or None. One subprocess per pair per call.
 _REMOTE_HEAD_CACHE = {}
 
@@ -329,14 +334,19 @@ def push_invocations(segments, depth=0, cd_dir=None):
                 yield call, cd_dir
             continue
 
-        if depth >= 2:
-            continue
         inner = nested_shell_command(strip_prefixes(segment))
         if not inner:
+            continue
+        if depth >= 2:
+            # Out of nesting budget with text still to run. Unknown is not clean.
+            if LOOKS_LIKE_PUSH_RE.search(inner):
+                block(RAW_COMMAND, "a git push nested deeper than this guard follows")
             continue
         try:
             nested = split_segments(tokenize(inner))
         except UnparseableCommand:
+            if LOOKS_LIKE_PUSH_RE.search(inner):
+                block(RAW_COMMAND, "a nested command could not be parsed, blocking conservatively")
             continue
         for found_call, found_dir in push_invocations(nested, depth + 1):
             yield found_call, (found_dir or cd_dir)
@@ -507,7 +517,7 @@ def main():
             # so an odd real push is still caught. Over-blocking is the safe
             # direction here, and it is why the marker is not consulted: a line
             # nobody could parse is a line whose quoting nobody can vouch for.
-            if re.search(r"\bgit\b[^\n]{0,80}\bpush\b", raw_line):
+            if LOOKS_LIKE_PUSH_RE.search(raw_line):
                 block(command, "command could not be parsed, blocking conservatively")
             continue
 
@@ -589,7 +599,7 @@ if __name__ == "__main__":
         # wave a real push through. So it fails OPEN for ordinary commands and
         # fails CLOSED only for text that looks like a push.
         sys.stderr.write("block-git-push-main crashed: %r\n" % (exc,))
-        if re.search(r"\bgit\b[^\n]{0,80}\bpush\b", RAW_COMMAND or ""):
+        if LOOKS_LIKE_PUSH_RE.search(RAW_COMMAND or ""):
             sys.stderr.write(
                 "The command mentions a push, so it is blocked rather than waved "
                 "through. Re-run with #allow-push-main if it is safe.\n")
