@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Shared parser: which files does a Bash command WRITE via redirection or tee?
 
-Used by the PostToolUse ^Bash$ branches of test-integrity-check.py and
-ai-signal-check.py. Exists because Edit/Write hooks never fire on shell
+Used by _bash_command_parse.py, which strips heredoc bodies with it, and by
+hooks that check files a Bash command writes. Exists because Edit/Write hooks never fire on shell
 writes (heredocs, `>`/`>>`, tee): that blind spot is exactly how dead tests
 were appended with `cat >>` on 2026-07-17.
 

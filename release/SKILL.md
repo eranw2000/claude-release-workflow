@@ -377,13 +377,13 @@ Keep the marker unquoted and after the args (quoting it makes git read it as a r
 
 If a push is rejected because the remote moved, fetch + rebase and retry. A rebased FEATURE branch needs `git push --force-with-lease` (never a plain `--force`). There is no equivalent on the base branch: never force-push it, however certain you are that nobody else pushed. Stop and surface it instead. This matches the Guardrails section below, which had said the opposite of the old wording here.
 
-**Then prove every MIRROR actually landed it. Mandatory whenever `git remote -v` shows more than one remote:**
+**Then prove every MIRROR actually landed it. Mandatory whenever the repo lists a mirror in `git config release.mirror`:**
 
 ```bash
-bash ~/.claude/skills/release/sync-remotes.sh
+bash ~/.claude/skills/release/sync-remotes.sh <repo path>
 ```
 
-Exit 0 means every mirror holds the same commit as origin's default branch. Exit 1 means one is behind, has diverged, or is a non-personal remote with Claude harness files tracked. **The release is not done until it exits 0.** Paste its output into the final report.
+A mirror is a remote you named once with `git -C <repo> config --add release.mirror <remote-name>`. Every other remote (an upstream, a fork, an archive) is listed in the output and never pushed. Exit 0 means every listed mirror holds the same commit as origin's default branch. Exit 1 means one is behind, has diverged, is not a remote, or is a non-personal remote with Claude harness files tracked. **The release is not done until it exits 0.** Paste its output into the final report.
 
 Why this is not optional: the deploy check in step 3 confirms PRODUCTION is right, and nothing anywhere confirms a mirror, because a mirror has nothing downstream of it to report a problem. Measured once already, a commit went live and never reached the client-facing mirror, which sat a commit behind for two weeks in silence.
 

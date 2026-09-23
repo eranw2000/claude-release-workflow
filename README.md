@@ -61,6 +61,16 @@ chmod +x ~/.claude/hooks/block-git-push-main.sh ~/.claude/hooks/test-integrity-c
 
 The skills reference the shared files by their installed path (`~/.claude/skills/_shared/...`), so keep `_shared/` next to the skills.
 
+### Mirror remotes
+
+`/release` copies origin's default branch to your mirror remotes with `release/sync-remotes.sh`. A remote is a mirror only when you name it, once per repo:
+
+```bash
+git -C <repo> config --add release.mirror <remote-name>
+```
+
+Any other remote (an upstream, a fork, an archive) is listed in the output and never pushed.
+
 ### Wire the hooks
 
 Add both hooks to `~/.claude/settings.json`: the push guard as a PreToolUse hook on Bash, and the test-integrity check as a PostToolUse hook on the write tools plus Bash (the Bash matcher catches shell-redirection writes that Write/Edit miss).

@@ -113,12 +113,31 @@ def command_segments(command):
     return split_segments(tokenize(scannable))
 
 
+# Options of a wrapper word that consume the NEXT token as their value, so
+# `sudo -u root git commit` reaches `git` rather than stopping at `-u`.
+WRAPPER_VALUE_FLAGS = {
+    "sudo": {"-u", "-g", "-h", "-p", "-U", "-C", "-D", "-R", "-r", "-t", "-T"},
+    "env": {"-u", "-C", "-S", "-P"},
+    "exec": {"-a"},
+}
+
+
 def strip_prefixes(tokens):
-    """Drop shell keywords, wrappers and VAR=value assignments from the front."""
+    """Drop shell keywords, wrappers, their options and VAR=value assignments."""
     out = list(tokens)
     while out:
         head = out[0]
-        if head in PREFIXES or ENV_ASSIGN.match(head):
+        if head in PREFIXES:
+            out.pop(0)
+            value_flags = WRAPPER_VALUE_FLAGS.get(head, set())
+            while out and out[0].startswith("-") and out[0] != "-":
+                flag = out.pop(0)
+                if flag == "--":
+                    break
+                if flag in value_flags and out:
+                    out.pop(0)
+            continue
+        if ENV_ASSIGN.match(head):
             out.pop(0)
             continue
         break
@@ -126,19 +145,38 @@ def strip_prefixes(tokens):
 
 
 def nested_shell_command(tokens):
-    """For `bash -c "<text>"`, the text it was told to run, else None."""
-    if not tokens:
+    """For `bash -c "<text>"` (also `-lc`, `-ec`, behind a wrapper), the text."""
+    tokens = strip_prefixes(tokens)
+    if not tokens or os.path.basename(tokens[0]) not in SHELLS:
         return None
-    if os.path.basename(tokens[0]) not in SHELLS or "-c" not in tokens:
-        return None
-    idx = tokens.index("-c")
-    return tokens[idx + 1] if idx + 1 < len(tokens) else None
+    saw_c = False
+    i = 1
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in ("-o", "+o", "-O", "+O"):
+            i += 2
+            continue
+        if tok == "--":
+            i += 1
+            break
+        if len(tok) > 1 and tok[0] in "-+" and not tok.startswith("--"):
+            if tok[0] == "-" and "c" in tok[1:]:
+                saw_c = True
+            i += 1
+            continue
+        if tok.startswith("--"):
+            i += 1
+            continue
+        break
+    if saw_c and i < len(tokens):
+        return tokens[i]
+    return None
 
 
 def git_call(tokens):
     """Parse one segment as a git invocation.
 
-    Returns a dict with subcommand, args, explicit_target and dash_c, or None
+    Returns a dict with subcommand, args, explicit_target, dash_c and dash_c_all, or None
     when this segment does not run git.
     """
     tokens = strip_prefixes(tokens)
@@ -146,6 +184,7 @@ def git_call(tokens):
         return None
 
     dash_c = None
+    dash_c_all = []
     explicit_target = False
     i = 1
     while i < len(tokens):
@@ -153,6 +192,7 @@ def git_call(tokens):
         if tok in GIT_GLOBAL_VALUE_FLAGS:
             if tok == "-C" and i + 1 < len(tokens):
                 dash_c = tokens[i + 1]
+                dash_c_all.append(tokens[i + 1])
                 explicit_target = True
             elif tok in ("--git-dir", "--work-tree"):
                 explicit_target = True
@@ -173,6 +213,9 @@ def git_call(tokens):
         "args": tokens[i + 1:],
         "explicit_target": explicit_target,
         "dash_c": dash_c,
+        # Every -C in order. git applies each relative one to the previous, so
+        # `git -C a -C b` runs in a/b; `dash_c` keeps only the last for older readers.
+        "dash_c_all": dash_c_all,
     }
 
 

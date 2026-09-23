@@ -35,27 +35,19 @@ CONFIG_REPO="$HOME/.claude"
 FAIL=0
 
 # ---------------------------------------------------------------------------
-# Which repo. An explicit path wins. Otherwise resolve from the cwd, with one
-# guard: a project DATA dir sits INSIDE ~/.claude, so `rev-parse` there returns
-# the config repo. In that case fall back to the same-named code repo.
+# Which repo. An explicit path wins. Otherwise the git top level of the cwd,
+# unless that is the ~/.claude config repo, which is never the one released.
 # ---------------------------------------------------------------------------
 REPO="${1:-}"
 if [ -z "$REPO" ]; then
   TOP=$(git rev-parse --show-toplevel 2>/dev/null)
-  if [ -n "$TOP" ] && [ "$(cd "$TOP" && pwd -P)" != "$(cd "$CONFIG_REPO" && pwd -P)" ]; then
+  if [ -n "$TOP" ] && [ "$(cd "$TOP" && pwd -P)" != "$(cd "$CONFIG_REPO" 2>/dev/null && pwd -P)" ]; then
     REPO="$TOP"
   else
-    GUESS="$HOME/PycharmProjects/$(basename "$PWD")"
-    if git -C "$GUESS" rev-parse --git-dir >/dev/null 2>&1; then
-      REPO="$GUESS"
-      echo "note: the cwd resolves to the config repo, so using $REPO instead."
-    else
-      echo "FATAL: cannot tell which repo you mean."
-      echo "       The cwd resolves to $CONFIG_REPO (a data dir sits inside it),"
-      echo "       and $GUESS is not a git repo."
-      echo "       Pass the repo path: bash $0 /path/to/repo"
-      exit 2
-    fi
+    echo "FATAL: cannot tell which repo you mean: the cwd is not inside a git repo,"
+    echo "       or it resolves to $CONFIG_REPO."
+    echo "       Pass the repo path: bash $0 /path/to/repo"
+    exit 2
   fi
 fi
 
@@ -117,10 +109,30 @@ if ! git -C "$REPO" cat-file -e "${ORIGIN_SHA}^{commit}" 2>/dev/null; then
   exit 2
 fi
 
-MIRRORS=$(git -C "$REPO" remote | grep -v '^origin$')
+# Only remotes named in `git config release.mirror` are mirrors. One line per
+# remote:  git -C <repo> config --add release.mirror <remote-name>
+# Every other remote (an upstream, a fork, an archive) is listed and left alone.
+MIRRORS=""
+for R in $(git -C "$REPO" config --get-all release.mirror 2>/dev/null); do
+  if [ "$R" = "origin" ]; then
+    echo "note: release.mirror names origin, which is the source, not a mirror. Skipped."
+  elif git -C "$REPO" remote get-url "$R" >/dev/null 2>&1; then
+    MIRRORS="$MIRRORS $R"
+  else
+    echo "FAIL: release.mirror names '$R', which is not a remote here."
+    FAIL=1
+  fi
+done
+for R in $(git -C "$REPO" remote | grep -v '^origin$'); do
+  case " $MIRRORS " in
+    *" $R "*) ;;
+    *) echo "note: remote '$R' is not listed in release.mirror, so it is left alone." ;;
+  esac
+done
+MIRRORS=$(echo $MIRRORS)
 if [ -z "$MIRRORS" ]; then
   echo "No mirror remotes configured. Nothing to sync."
-  exit 0
+  exit "$FAIL"
 fi
 
 # ---------------------------------------------------------------------------
