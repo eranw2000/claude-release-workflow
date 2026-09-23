@@ -29,7 +29,7 @@
         <mxCell id="s2e" value="rebuild local Docker to match prod" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="470" y="550" width="240" height="50" as="geometry"/></mxCell>
 
         <!-- STAGE 3: VERIFY -->
-        <mxCell id="s3" value="Verify : /production-smoke  (read-only)" style="rounded=0;fillColor=#fafafa;strokeColor=#0050b3;fontStyle=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;dashed=1;strokeWidth=2;html=1;" vertex="1" parent="1"><mxGeometry x="810" y="80" width="300" height="560" as="geometry"/></mxCell>
+        <mxCell id="s3" value="Verify : your own check (not bundled)" style="rounded=0;fillColor=#fafafa;strokeColor=#0050b3;fontStyle=1;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;dashed=1;strokeWidth=2;html=1;" vertex="1" parent="1"><mxGeometry x="810" y="80" width="300" height="560" as="geometry"/></mxCell>
         <mxCell id="s3a" value="GET health + key routes (200)" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="850" y="120" width="220" height="50" as="geometry"/></mxCell>
         <mxCell id="s3b" value="deploy commit live &amp; not stale" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="850" y="200" width="220" height="50" as="geometry"/></mxCell>
         <mxCell id="s3c" value="DEBUG off · scan logs for 5xx" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;html=1;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="850" y="280" width="220" height="50" as="geometry"/></mxCell>
