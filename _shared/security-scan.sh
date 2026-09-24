@@ -317,7 +317,7 @@ def refusal(entry):
                 "it would waive the same path in every repository")
     if not str(entry.get("path") or "").strip():
         if entry.get("fingerprint"):
-            return ("it carries only a fingerprint, which nothing in this harness emits, "
+            return ("it carries only a fingerprint, and waivers match on a path, "
                     "so there is no path to match")
         return "it names no path glob, so there is nothing to match"
     return None
@@ -327,8 +327,8 @@ def matches(entry, res):
     """A finding is waived when the repo matches AND the rule matches AND the path glob
     matches. Every entry reaching here has already passed `refusal`.
 
-    A `fingerprint` entry is NOT honoured: nothing in this harness emits one, so an entry
-    carrying only a fingerprint waives nothing and is refused above.
+    A `fingerprint` entry is NOT honoured: waivers match on repo, rule and path only, so an
+    entry carrying only a fingerprint waives nothing and is refused above.
     """
     if str(entry.get("repo") or "").strip() not in repo_ids:
         return False

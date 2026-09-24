@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 """PostToolUse hook + CLI: catch DEAD, UNREGISTERED, and REAL-PATH-DEFAULT tests.
 
-Three incidents drive this. Two are from 2026-07-17: tests appended after a
-custom `if __name__ == "__main__"`
-runner never bind (the guard's SystemExit halts execution first), and tests
-missing from a hand-maintained call list silently never run. Both read as green
-from the outside; the suite total is the only tell, and it was misread twice.
+It checks three shapes of test. Tests appended after a custom
+`if __name__ == "__main__"` runner never bind (the guard's SystemExit
+halts execution first), and tests missing from a hand-maintained call
+list never run. Both read as green from the outside; the suite total is
+the only tell.
 
-The third is 2026-07-31 (Check C): a test called a destructive helper without
-passing `archive_dir`, whose default resolved to the user's REAL backup
-directory. It was harmless while the guard held, because that test only
-exercised a refusal path, so nothing ever looked wrong. A mutation run then
-disabled the guard, the refusal became a proceed, and the test overwrote a 43MB
-backup with its own tar. The rule "tests never mutate real data" already existed
-in memory and had been written four days earlier; memory loads by relevance and
-never surfaced. That is why this one needs a deterministic net rather than prose.
+The third (Check C) is a test that calls a destructive helper without
+overriding a parameter whose default resolves to the user's REAL data,
+such as a backup directory. It is harmless while a guard in the helper
+holds, and destroys real data the moment that guard is broken, for
+example by a mutation run. A deterministic check catches this where a
+written rule is easy to forget.
 
 Wired twice in ~/.claude/settings.json PostToolUse:
 - the `^(Write|Edit|MultiEdit)$` matcher (target = tool_input.file_path);
@@ -56,12 +54,8 @@ def eligible(path):
         return False
     if _SKIP_DIRS.intersection(path.split(os.sep)):
         return False
-    # `tests.py` is DJANGO'S DEFAULT NAME, one per app, and until 2026-08-20 it was
-    # not eligible: `"tests.py".startswith("test_")` is False and `"tests"` does not
-    # end in `_test`. So none of these checks had ever run against a Django project's
-    # test files, in any repo, which is most of the estate. Found by re-enacting the
-    # PR #39 incident against Check D and getting eligible=False on the very file the
-    # check was written for.
+    # `tests.py` is DJANGO'S DEFAULT NAME, one per app. It matches neither the
+    # `test_` prefix nor the `_test` suffix, so it is listed by name.
     return (base.startswith("test_") or base[:-3].endswith("_test")
             or base in ("tests.py", "test.py"))
 
@@ -189,10 +183,10 @@ def _check_real_path_defaults(path, tree):
     """Check C: a TEST that calls a destructive function without overriding a
     parameter whose default points at the user's real filesystem.
 
-    The 2026-07-31 incident: two tests called archive_and_remove() without
-    passing archive_dir, whose default is the real backup dir. Harmless while
-    the guard held (those tests only exercised REFUSAL paths), then a mutation
-    run turned the guard off and they overwrote a 43MB backup with their own tar.
+    Example: a test calls archive_and_remove() without passing
+    archive_dir, whose default is the real backup dir. Harmless while the
+    guard holds (the test only exercises a REFUSAL path); if the guard is
+    ever broken, the test overwrites the real backup with its own tar.
     """
     directory = os.path.dirname(os.path.abspath(path))
     modules, direct = {}, {}
@@ -302,10 +296,10 @@ _EXTREME_RE = re.compile(
     r"|\b(?:larger|bigger|longer|wider|heavier|slower|greater|exceeds?|over)\b",
     re.IGNORECASE)
 # Sentences are split AFTER the block is joined into one line, never on the newline
-# itself. The incident's own sentence is hard-wrapped as "No single real finding is
-# this / large, so the fixture is already pessimistic", so a newline-splitting version
-# sees "this" and "large" as different sentences and the pair rule never fires. The
-# first version of this check did exactly that and missed it. Splitting on a period
+# itself. A real sentence is often hard-wrapped, as in "No single real finding
+# is this / large, so the fixture is already pessimistic", and a
+# newline-splitting version would see "this" and "large" as different
+# sentences, so the pair rule would never fire. Splitting on a period
 # followed by whitespace also leaves `0.70` and `3.1` intact, which matters because
 # these docstrings are full of measurements.
 _SENTENCE_SPLIT = re.compile(r"\.\s+")
@@ -420,8 +414,7 @@ def _check_corpus_scaled_expectations(tree):
     two candidate rules. That was designed and REFUTED by measurement in 2026-08
     (in a fixture whose two candidate orderings AGREE). This asks
     the one question that IS statically visible: does the expected side scale with the
-    input. Measured before shipping: 3 hits across 1,433 test files in the whole
-    estate, and it catches the original incident replayed from the unfixed file.
+    input. Measured before shipping: 3 hits across 1,433 real test files.
     """
     findings = []
     for node in ast.walk(tree):
@@ -583,9 +576,9 @@ FIXTURE_NOTE = (
 def fixture_edit_function(path, old, new):
     """The helper a modifying Edit landed in, or None.
 
-    Located in the saved file, never in old_string: the 2026-09-20 incident edited
-    two lines inside `account_setup` without its `def` line, so a text match on
-    the edit alone misses exactly the case this exists for. `main` is excluded
+    Located in the saved file, never in old_string: an Edit can change lines
+    inside a helper without touching its `def` line, so a text match on the
+    edit alone would miss it. `main` is excluded
     because board-style test files keep every check inside it."""
     if not [l for l in old.splitlines() if l.strip() and l not in new.splitlines()]:
         return None

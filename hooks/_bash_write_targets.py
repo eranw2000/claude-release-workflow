@@ -63,8 +63,7 @@ def heredoc_bodies_by_target(command, cwd=None):
     Exists because a caller that scans written CONTENT has to know which file
     the content went to. Concatenating every body and blaming every target
     makes a verifier heredoc in the same call look like part of the document
-    it verifies, which is how ai-signal-check warned twice about clean files
-    on 2026-09-01.
+    it verifies, so a content check would warn about a clean file.
     """
     cd_dir = None
     m = _CD_PREFIX.match(command)
