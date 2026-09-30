@@ -9,6 +9,11 @@ One PR comment (`gh pr comment`) containing:
 - Every Critical/Blocker with its status: **Fixed** (name the regression test),
   **Declined** (state the reason), or **Open**.
 - The reproduction command for each executed finding.
+- **A `Security scan:` line, on the head you are certifying**, from the same scan
+  `/release` runs at A3b:
+  `bash ~/.claude/skills/_shared/security-scan.sh --since=<base sha> "$(git rev-parse --show-toplevel)"`.
+  A `[NEW]` finding means the head is not `CLEAN` yet: fix it or waive it in the
+  register, then scan again. Write e.g. `Security scan: clean since <base sha>, 9 files`.
 - The machine-readable LAST line, exactly one of:
   - `Review-round verdict: CLEAN @ <reviewed-HEAD-sha>`
   - `Review-round verdict: CRITICALS-OPEN @ <reviewed-HEAD-sha>`
@@ -18,6 +23,21 @@ One PR comment (`gh pr comment`) containing:
 COMPLETED round: every Critical and Blocker was driven to Fixed or Declined, and
 the full suite was re-run green. It is a certification, and `/release` treats it
 as one.
+
+**CLEAN also means `/release`'s security scan gate will pass at this head.** Run it on
+the reviewed head before choosing the value, with the base SHA the PR targets:
+
+```bash
+bash ~/.claude/skills/_shared/security-scan.sh --since=<base sha> <repo>
+```
+
+Exit 0, or exit 2 with `NOTHING TO SCAN`, allows CLEAN. Exit 1 or 3 does not, until every
+`[NEW]` finding is fixed in the code, or sits in the waiver register
+(`~/.claude/skills/_shared/security-standards/baseline.yml`) with the owner's approval; fix
+it in the code by default. **A reviewer judging a scan finding a false positive, and the
+comment saying so, does NOT clear it**: `/release` A3b reads the scan, never the comment.
+With a finding still open, ask fix-or-waive first; when nobody can answer, post
+`CRITICALS-OPEN` and name the findings.
 
 **In checkpoint mode you may not post `CLEAN`.** Post `CHECKPOINT-ADVISORY`
 instead whenever the round found nothing blocking. A checkpoint's findings are

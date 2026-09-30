@@ -158,5 +158,7 @@ write belongs here, in whoever spawned them.
   `/release`.
 - Never post a CLEAN verdict while any Critical/Blocker is unresolved and
   undeclined.
+- Never post CLEAN while the release security scan has an unfixed, unwaived `[NEW]`
+  finding at the reviewed head (step 8).
 - Never bind a verdict to a SHA you did not actually review and test.
 - In checkpoint mode, nothing here refuses, blocks, or rolls back the PR.
