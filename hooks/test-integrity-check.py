@@ -463,6 +463,80 @@ def _check_corpus_claims(tree, src):
     ]
 
 
+# Check E: a test that READS its input from one background job's scratch folder
+# (`~/.claude/jobs/<8 hex>/`). That folder is deleted with the job, so the test later
+# crashes or silently loses the case, and a crash takes every other case in the file
+# with it. Only a READ is flagged: a path handed to the code under test as data, or a
+# folder the test writes into itself, is fine.
+_SCRATCH_PATH = re.compile(r"/\.claude/jobs/[0-9a-f]{8}/")
+_SCRATCH_READERS = {"open", "Path", "PurePath", "listdir", "scandir", "walk", "glob",
+                    "iglob", "copy", "copy2", "copyfile", "copytree", "load", "loads",
+                    "read_text", "read_bytes"}
+
+
+def _call_name(func):
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
+
+
+def _is_sys_path_add(func):
+    return (isinstance(func, ast.Attribute) and func.attr in ("insert", "append")
+            and isinstance(func.value, ast.Attribute) and func.value.attr == "path"
+            and isinstance(func.value.value, ast.Name) and func.value.value.id == "sys")
+
+
+def _check_scratch_reads(tree):
+    def scratch_in(node, tainted):
+        for sub in ast.walk(node):
+            if (isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+                    and _SCRATCH_PATH.search(sub.value)):
+                return sub.value
+            if isinstance(sub, ast.Name) and sub.id in tainted:
+                return tainted[sub.id]
+        return None
+
+    # A name bound to a scratch path, or to an expression built from one
+    # (os.path.join(BASE, "x")), is tainted. Iterate to a fixed point so the order
+    # of assignments does not matter.
+    tainted = {}
+    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)]
+    changed = True
+    while changed:
+        changed = False
+        for node in assigns:
+            hit = scratch_in(node.value, tainted)
+            if not hit:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id not in tainted:
+                    tainted[target.id] = hit
+                    changed = True
+
+    findings, seen = [], set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (_call_name(node.func) in _SCRATCH_READERS or _is_sys_path_add(node.func)):
+            continue
+        hit = None
+        for arg in list(node.args) + [k.value for k in node.keywords]:
+            hit = scratch_in(arg, tainted)
+            if hit:
+                break
+        if hit and (node.lineno, hit) not in seen:
+            seen.add((node.lineno, hit))
+            findings.append(
+                "SCRATCH-PATH READ at line %d: the test reads %r, inside one background "
+                "job's scratch folder. That folder is deleted with the job, so this test "
+                "will later crash or lose the case, and a crash stops every other case in "
+                "the file. Commit the input beside the test (a fixtures folder) and read "
+                "it from there." % (node.lineno, hit))
+    return findings
+
+
 def analyze(path):
     """Return (status, findings) for one on-disk test file."""
     try:
@@ -475,9 +549,10 @@ def analyze(path):
     except SyntaxError as e:
         return (UNPARSEABLE, ["line %s: %s" % (e.lineno, e.msg)])
 
-    # Checks C and D run on EVERY eligible test file, including pytest-style ones
+    # Checks C, D and E run on EVERY eligible test file, including pytest-style ones
     # that the runner-guard checks below deliberately skip.
     findings = list(_check_real_path_defaults(path, tree))
+    findings.extend(_check_scratch_reads(tree))
     findings.extend(_check_corpus_claims(tree, src))
     findings.extend(_check_corpus_scaled_expectations(tree))
 

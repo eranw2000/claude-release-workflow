@@ -66,10 +66,56 @@ class UnparseableCommand(Exception):
     """The text could not be tokenized, usually an unbalanced quote."""
 
 
+_WORD_START = " \t\r\n;|&()<>"
+
+
+def strip_comments(text):
+    """Drop `#` comments, keeping the newline that ends each one.
+
+    shlex's own comment handling reads the rest of the line with readline(),
+    which also eats the newline, so the NEXT line welded onto the commented one:
+    `git push origin main #allow-push-main` then `git ls-remote origin` parsed
+    as one push of `git` and `ls-remote`.
+    It also ended a word at any `#`, where bash starts a comment only at the
+    start of a word, so `a#b` and `$#` were cut short.
+    """
+    out, i, n = [], 0, len(text)
+    single = double = False
+    while i < n:
+        c = text[i]
+        if single:
+            out.append(c)
+            single = c != "'"
+        elif double:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 1
+            elif c == '"':
+                double = False
+        elif c == "\\" and i + 1 < n:
+            out.append(c)
+            out.append(text[i + 1])
+            i += 1
+        elif c == "#" and (not out or out[-1] in _WORD_START):
+            end = text.find("\n", i)
+            if end < 0:
+                break
+            i = end
+            continue
+        else:
+            single = c == "'"
+            double = c == '"'
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def tokenize(text):
     """Quote-aware token list. Operators come back as their own tokens."""
-    lex = shlex.shlex(text, posix=True, punctuation_chars=PUNCTUATION_CHARS)
+    lex = shlex.shlex(strip_comments(text), posix=True, punctuation_chars=PUNCTUATION_CHARS)
     lex.whitespace_split = True
+    lex.commenters = ""
     # A newline ENDS a command, so it must come back as its own token. shlex
     # counts it as ordinary whitespace by default, which silently welded two
     # commands into one segment: `git status` newline `git push origin main`
