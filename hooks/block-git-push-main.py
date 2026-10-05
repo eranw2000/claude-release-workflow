@@ -370,6 +370,17 @@ def push_invocations(segments, depth=0, cd_dir=None):
             yield found_call, (found_dir or cd_dir)
 
 
+def repo_flag(args):
+    """The value of `--repo=<x>` or `--repo <x>`, the last one given, or None."""
+    value = None
+    for i, tok in enumerate(args):
+        if tok.startswith("--repo="):
+            value = tok[len("--repo="):]
+        elif tok == "--repo" and i + 1 < len(args):
+            value = args[i + 1]
+    return value
+
+
 def push_flags(args):
     """The flag names of a `git push`, with the values they consume skipped."""
     flags = set()
@@ -481,8 +492,10 @@ def is_harness_path(path):
     parts = path.split("/")
     if parts[-1] in HARNESS_BASENAMES or path in HARNESS_PATHS:
         return True
+    # Every part, the file name included: `.cursorignore`, `.aider.conf.yml` and
+    # `.windsurfrules` are harness files at the repo root, not only folders.
     return any(p.startswith(HARNESS_DIR_PREFIXES) or (p + "/").startswith(HARNESS_DIR_PREFIXES)
-               for p in parts[:-1])
+               for p in parts)
 
 
 def push_urls(directory, remote):
@@ -502,24 +515,45 @@ def push_urls(directory, remote):
     return [u.strip() for u in proc.stdout.splitlines() if URL_RE.match(u.strip())]
 
 
+def local_refs(directory, *namespaces):
+    """Every ref under the given namespaces (refs/heads, refs/tags), or None."""
+    try:
+        proc = subprocess.run(["git", "-C", directory, "for-each-ref", "--format=%(refname)"]
+                              + list(namespaces), capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return [r for r in proc.stdout.split() if r]
+
+
 def pushed_sources(directory, refspecs, flags):
-    """The local refs whose trees this push sends."""
-    if flags & PUSH_EVERYTHING_FLAGS:
-        try:
-            proc = subprocess.run(["git", "-C", directory, "for-each-ref", "--format=%(refname)", "refs/heads"],
-                                  capture_output=True, text=True, timeout=5)
-            return [r for r in proc.stdout.split() if r]
-        except Exception:
-            return ["HEAD"]
+    """The local refs whose trees this push sends.
+
+    A source the guard cannot read from the text (a `$branch` variable, a
+    `$(...)` substitution) could name any local ref, so it stands for EVERY
+    branch and tag plus HEAD: a clean repository still passes, and one holding a
+    harness file anywhere is refused rather than waved through. `--tags` and
+    `--mirror` send the tag trees as well."""
     sources = []
-    for refspec in refspecs or ["HEAD"]:
+    if flags & PUSH_EVERYTHING_FLAGS:
+        spaces = ("refs/heads", "refs/tags") if "--mirror" in flags else ("refs/heads",)
+        sources += local_refs(directory, *spaces) or ["HEAD"]
+    elif not refspecs and "--tags" not in flags:
+        sources.append("HEAD")
+    if flags & {"--tags", "--mirror"}:
+        sources += local_refs(directory, "refs/tags") or []
+    for refspec in refspecs:
         src = refspec.lstrip("+").split(":", 1)[0].strip()
         if not src:
             continue  # a delete sends no tree
-        if SUBSTITUTION in src or src in HEAD_ALIASES:
+        if src in HEAD_ALIASES:
             src = "HEAD"
+        elif SUBSTITUTION in src or "$" in src or "`" in src:
+            sources += ["HEAD"] + (local_refs(directory, "refs/heads", "refs/tags") or [])
+            continue
         sources.append(src)
-    return sources
+    return list(dict.fromkeys(sources))
 
 
 def harness_files_in(directory, ref):
@@ -623,7 +657,10 @@ def main():
         for call, call_cd in push_invocations(segments + body_segments, cd_dir=cd_dir):
             positionals = positional_args(call["args"], PUSH_VALUE_FLAGS)
             refspecs = positionals[1:] if positionals else []
-            remote = positionals[0] if positionals else "origin"
+            # `--repo=<repo>` is "equivalent to the <repository> argument. If both
+            # are specified, the command-line argument takes precedence" (git-push
+            # manual). So it decides the destination only when no positional does.
+            remote = positionals[0] if positionals else (repo_flag(call["args"]) or "origin")
             directory = resolve_dir(call["dash_c"], call_cd, cwd)
 
             # --- Layer 3: harness files to a client remote. Runs first, and

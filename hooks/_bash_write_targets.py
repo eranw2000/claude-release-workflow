@@ -26,6 +26,18 @@ _TEE = re.compile(r"\btee\s+([^;|&\n]+)")
 _CD_PREFIX = re.compile(r"^\s*cd\s+(?:\"([^\"]+)\"|'([^']+)'|(\S+))\s*&&")
 
 
+def _code_part(line):
+    """The line with any `#` comment removed, so a `<<EOF` inside a comment
+    opens no heredoc. Without this, `echo ok # <<EOF` swallowed the NEXT line
+    as a heredoc body and the command on it vanished from every guard.
+    Lazy import: _bash_command_parse imports this module at load time."""
+    try:
+        from _bash_command_parse import strip_comments
+    except Exception:                                   # pragma: no cover
+        return line
+    return strip_comments(line)
+
+
 def strip_heredocs(command):
     """Return (command with heredoc bodies removed, list of body strings)."""
     kept = []
@@ -45,7 +57,7 @@ def strip_heredocs(command):
                     current = []
                 current.append(line)
             continue
-        for m in _HEREDOC_OPEN.finditer(line):
+        for m in _HEREDOC_OPEN.finditer(_code_part(line)):
             queue.append((m.group(3), m.group(1) == "-"))
         kept.append(line)
     if current is not None:  # unterminated heredoc: rest of command is body
@@ -110,7 +122,7 @@ def heredoc_bodies_by_target(command, cwd=None):
                     pending = target
                 current.append(line)
             continue
-        opens = list(_HEREDOC_OPEN.finditer(line))
+        opens = list(_HEREDOC_OPEN.finditer(_code_part(line)))
         if opens:
             target = _line_target(line)
             for om in opens:

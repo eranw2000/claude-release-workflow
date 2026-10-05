@@ -70,7 +70,7 @@ _WORD_START = " \t\r\n;|&()<>"
 
 
 def strip_comments(text):
-    """Drop `#` comments, keeping the newline that ends each one.
+    r"""Drop `#` comments, keeping the newline that ends each one.
 
     shlex's own comment handling reads the rest of the line with readline(),
     which also eats the newline, so the NEXT line welded onto the commented one:
@@ -78,9 +78,15 @@ def strip_comments(text):
     as one push of `git` and `ls-remote`.
     It also ended a word at any `#`, where bash starts a comment only at the
     start of a word, so `a#b` and `$#` were cut short.
+
+    Word start is tracked as state, not read back from the last character kept:
+    after `\ ` or `\;` the last character is a plain space or `;`, yet the
+    escape keeps it inside the word, so `echo foo\ #; git commit` is ONE echo
+    argument followed by a real commit, not a comment.
     """
     out, i, n = [], 0, len(text)
     single = double = False
+    at_start = True
     while i < n:
         c = text[i]
         if single:
@@ -97,7 +103,8 @@ def strip_comments(text):
             out.append(c)
             out.append(text[i + 1])
             i += 1
-        elif c == "#" and (not out or out[-1] in _WORD_START):
+            at_start = False
+        elif c == "#" and at_start:
             end = text.find("\n", i)
             if end < 0:
                 break
@@ -107,6 +114,7 @@ def strip_comments(text):
             single = c == "'"
             double = c == '"'
             out.append(c)
+            at_start = c in _WORD_START
         i += 1
     return "".join(out)
 

@@ -10,15 +10,23 @@ shared, and every reviewer still reports that isolation was applied (measured
 diff actually lives in.
 
     setup --repo <code repo> --agents code-reviewer,pr-validator [--base <dir>]
+          [--with <ignored path>]...
         Records the real checkout (every changed, untracked and ignored file,
         with a content hash and its staged blob, submodules included), then
         makes one detached worktree per agent and carries the uncommitted
-        changes and untracked files into each, submodules included. Prints:
+        changes and untracked files into each, submodules included. Each
+        `--with` path (an IGNORED path the suite needs: a build output, a data
+        folder) is copied into every copy as well, following a symlink, cloned
+        copy-on-write on macOS, so a reviewer's write cannot reach the original.
+        Prints:
             <agent> <worktree path>
             pythonpath <agent> <value>   put this in PYTHONPATH, so the copy's
                                          code wins over an editable install
                                          that points at the real checkout
             interpreter <path>           only when the repo has a .venv
+            not-carried <path> ...       ignored top-level paths the copies
+                                         lack; any the suite reads belongs in
+                                         a `--with`
             state <path>
         The state file is written before the first copy and after every copy,
         so a setup that fails halfway can still be cleaned up with `check`.
@@ -29,23 +37,35 @@ diff actually lives in.
         DIRECTORIES (.venv, node_modules) are watched for appearing or
         vanishing only, not for changes inside. Then removes the copies, but
         only paths inside the state file's own folder that git lists as a
-        detached worktree of the recorded repository.
-        Exit 0 clean, 1 leftovers found, 3 clean but a copy could not be
-        removed, 2 usage or git error. It never reverts anything: a leftover
-        is reported, not discarded.
+        detached worktree of the recorded repository AND whose git admin
+        folder holds the random token setup wrote there.
+        Then lists anything else left in the state file's folder (a reviewer
+        that wrote OUTSIDE its copy) as STRAY lines.
+        Exit 0 clean, 1 leftovers found, 4 the checkout is clean but strays
+        were written beside the copies, 3 clean but a copy could not be
+        removed, 2 usage or git error. It never reverts or deletes anything: a
+        leftover or a stray is reported, not discarded.
 """
 
 import argparse
 import hashlib
 import json
 import os
+import hmac
 import pathlib
+import secrets
 import shutil
 import subprocess
 import sys
 import tempfile
 
 BIG_FILE = 64 * 1024 * 1024  # above this, compare size and mtime instead of hashing
+
+# A random token written into each copy's OWN git admin folder (`.git/worktrees/<name>/`)
+# the moment the copy exists, and kept in the state file. `check` removes a copy only when
+# that file holds the same token, so an edited or stale state file cannot point the removal
+# at the real checkout or at a worktree some other run made: neither carries this token.
+TOKEN_FILE = "review-round-token"
 
 
 def git(repo, *args, stdin=None):
@@ -118,11 +138,29 @@ def snapshot(repo, prefix=""):
     return snap
 
 
+def admin_dir(worktree):
+    """The worktree's own git admin folder, absolute."""
+    return pathlib.Path(git(worktree, "rev-parse", "--path-format=absolute",
+                            "--git-dir").decode().strip())
+
+
+def made_by_this_setup(path, token):
+    """True only when `path`'s git admin folder holds `token`. The caller has already
+    checked that `path` is a detached worktree of the recorded repository."""
+    if not token:
+        raise RuntimeError("the state file carries no token; not a copy this setup made")
+    mark = admin_dir(path) / TOKEN_FILE
+    if not mark.is_file() or not hmac.compare_digest(mark.read_text(), token):
+        raise RuntimeError(f"{path} does not carry this setup's token; not a copy it made")
+    return True
+
+
 def make_copy(repo, dest, rev, agent, state, save):
     """Worktree of `repo` at `rev` in `dest`, plus its uncommitted and untracked
     files, then the same for every checked-out submodule inside it."""
     repo = pathlib.Path(repo)
     git(repo, "worktree", "add", "--detach", str(dest), rev)
+    (admin_dir(dest) / TOKEN_FILE).write_text(state["token"])
     state["copies"].append({"agent": agent, "repo": str(repo), "path": str(dest)})
     save()
     patch = git(repo, "diff", "HEAD", "--binary", "--ignore-submodules=all")
@@ -137,11 +175,59 @@ def make_copy(repo, dest, rev, agent, state, save):
         make_copy(repo / sub, dest / sub, sub_head, agent, state, save)
 
 
+# Ignored entries never worth naming in the not-carried line: tooling caches and the
+# interpreter, which a copy reaches through the printed `interpreter` line instead.
+NOT_WORTH_NAMING = {".venv/", "venv/", "node_modules/", "__pycache__/", ".pytest_cache/",
+                    ".mypy_cache/", ".ruff_cache/", ".idea/", ".DS_Store"}
+
+
+def carried_paths(repo, names):
+    """The `--with` paths, each checked to be an IGNORED path inside `repo` that exists.
+
+    A tracked path is already in every copy, and a path outside the repository is not
+    this round's to copy, so both are refused before any copy is made: `git
+    check-ignore` answers non-zero for each, which is the one check that covers both."""
+    out = []
+    for name in names:
+        rel = pathlib.PurePosixPath(name.strip().rstrip("/"))
+        if not name.strip():
+            raise RuntimeError("--with: empty path")
+        if not os.path.lexists(repo / rel):
+            raise RuntimeError(f"--with {name}: no such path in {repo}")
+        ignored = subprocess.run(["git", "-C", str(repo), "check-ignore", "-q", str(rel)],
+                                 capture_output=True).returncode == 0
+        if not ignored:
+            raise RuntimeError(f"--with {name}: not an ignored path (tracked or untracked "
+                               "files are carried already)")
+        out.append(str(rel))
+    return out
+
+
+def carry(repo, dest, rel):
+    """A PRIVATE copy of the ignored path `rel` in the reviewer copy `dest`.
+
+    A symlink is followed, so a folder reached through a link to another checkout
+    arrives as a real folder and a reviewer's write cannot land in the original. On
+    macOS `cp -c` clones (copy-on-write), so a large data folder costs no disk."""
+    src, dst = (repo / rel).resolve(), dest / rel
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "darwin" and subprocess.run(
+            ["cp", "-cR", str(src), str(dst)], capture_output=True).returncode == 0:
+        return
+    if dst.exists() or dst.is_symlink():  # a failed clone may leave a partial copy
+        shutil.rmtree(dst) if dst.is_dir() and not dst.is_symlink() else dst.unlink()
+    if src.is_dir():
+        shutil.copytree(src, dst, symlinks=True)
+    else:
+        shutil.copy2(src, dst)
+
+
 def setup(args):
     repo = pathlib.Path(git(args.repo, "rev-parse", "--show-toplevel").decode().strip())
     agents = [a.strip() for a in args.agents.split(",") if a.strip()]
     if not agents:
         raise RuntimeError("no agents named")
+    carried = carried_paths(repo, args.with_ or [])
     base = pathlib.Path(args.base or tempfile.mkdtemp(prefix="review-round-")).resolve()
     if base == repo or repo in base.parents:
         raise RuntimeError(f"--base {base} is inside the repository {repo}")
@@ -149,7 +235,8 @@ def setup(args):
     state_path = base / "state.json"
 
     head = git(repo, "rev-parse", "HEAD").decode().strip()
-    state = {"repo": str(repo), "head": head, "snapshot": snapshot(repo), "copies": []}
+    state = {"repo": str(repo), "head": head, "snapshot": snapshot(repo), "copies": [],
+             "agents": agents, "token": secrets.token_hex(16)}
 
     def save():
         state_path.write_text(json.dumps(state, indent=2))
@@ -158,6 +245,8 @@ def setup(args):
     try:
         for agent in agents:
             make_copy(repo, base / agent, head, agent, state, save)
+            for rel in carried:
+                carry(repo, base / agent, rel)
     except Exception:
         print(f"state {state_path}")
         print(f"setup failed partway; remove what it made with: check --state {state_path}",
@@ -172,6 +261,15 @@ def setup(args):
         print(f"pythonpath {agent} {os.pathsep.join(paths)}")
     if venv_python.exists():
         print(f"interpreter {venv_python}")
+    # The ignored top-level paths the copies do NOT have. A suite that needs one (a
+    # build output, a data folder) fails in every copy for reasons the diff did not
+        # cause, and certifies nothing.
+    left_out = [p for p in zsplit(git(repo, "ls-files", "-z", "--others", "--ignored",
+                                      "--exclude-standard", "--directory"))
+                if "/" not in p.rstrip("/") and p not in NOT_WORTH_NAMING
+                and p.rstrip("/") not in carried]
+    if left_out:
+        print("not-carried " + " ".join(left_out))
     print(f"state {state_path}")
     return 0
 
@@ -205,6 +303,7 @@ def check(args):
                 raise RuntimeError(f"{path} is outside {base}; not a copy this setup made")
             if str(path) not in detached_worktrees(copy["repo"]):
                 raise RuntimeError(f"{path} is not a detached worktree of {copy['repo']}")
+            made_by_this_setup(path, state.get("token"))
             git(copy["repo"], "worktree", "remove", "--force", str(path))
         except RuntimeError as e:
             stuck += 1
@@ -212,9 +311,26 @@ def check(args):
     for r in {c["repo"] for c in state["copies"]}:
         git(r, "worktree", "prune")
 
+    # Anything else in the round's own folder was written by a reviewer OUTSIDE its copy
+        # (logs, scripts, a copied config file), which the checkout comparison above
+        # cannot see. Named, never deleted.
+    # An agent's own slot is never a stray, even when it is still there: a copy that could
+    # not be removed (reported above) or one a failed setup half-made.
+    left = {str(pathlib.Path(c["path"]).resolve()) for c in state["copies"]}
+    slots = set(state.get("agents") or [c["agent"] for c in state["copies"]])
+    strays = sorted(p for p in base.iterdir()
+                    if p != state_path and p.name not in slots
+                    and str(p.resolve()) not in left)
+    for p in strays:
+        print(f"STRAY {p}{'/' if p.is_dir() else ''}: written beside the copies, not removed")
+
     if changed:
         print(f"check: {len(changed)} file(s) in {repo} changed during the round")
         return 1
+    if strays:
+        print(f"check: {repo} unchanged, but {len(strays)} file(s) were written outside "
+              f"the copies in {base}")
+        return 4
     if stuck:
         print(f"check: {repo} unchanged, but {stuck} copy(ies) were not removed")
         return 3
@@ -229,6 +345,8 @@ def main(argv=None):
     s.add_argument("--repo", required=True)
     s.add_argument("--agents", required=True)
     s.add_argument("--base")
+    s.add_argument("--with", dest="with_", action="append", metavar="PATH",
+                   help="an ignored path the suite needs (repeatable)")
     c = sub.add_parser("check")
     c.add_argument("--state", required=True)
     args = ap.parse_args(argv)
