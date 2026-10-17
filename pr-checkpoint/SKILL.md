@@ -50,32 +50,9 @@ Use `$BASE` everywhere below instead of a literal `main`.
 
 ### Find the spec that belongs to your initiative
 
-A repo hosts more than one initiative over its life. The first writes `REQUIREMENTS.md`
-and `SPEC.md` at the repo root, and a later one writes its own under
-`docs/<initiative>/`. So the copy at the root is not always the one you want, and
-grounding on the wrong initiative's spec produces work that is internally consistent
-and aimed at the wrong system, which review does not catch.
+Pick the REQUIREMENTS.md / SPEC.md whose `Initiative` field names this work, and stop when none or several do.
 
-Say which initiative this work is for, then resolve the file instead of assuming the
-root copy:
-
-1. List the candidates: the repo root copy, every `docs/*/` copy, and any other
-   location this skill already tells you to check.
-2. Read the `Initiative` field of each. That field decides, never the directory name,
-   which is a slug somebody chose and can be stale or wrong.
-3. Exactly one names your initiative: use it, and say which path you used.
-4. None names it: STOP and tell the user what you found and where. Do not fall back to
-   the root copy.
-5. More than one names it: STOP and name every path. Two files claiming one initiative
-   is a thing to report, not to settle by picking one.
-6. A candidate carries no `Initiative` field: say so. Where it is the only candidate you
-   may use it, and you must say you read a spec with no recorded owner.
-
-When the user hands you an explicit path, use that path. Check its `Initiative` field
-the same way, and on a mismatch stop and say whether a file for your initiative sits
-somewhere else.
-
-IDs pulled from the wrong file describe another workstream's contract, and the PR body carries them onward.
+**Read `~/.claude/skills/pr-checkpoint/reference/1b-find-the-spec.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
 
 ### 2. Commit any uncommitted work
 
@@ -123,85 +100,15 @@ PR title under 70 characters. Mark as draft if your repo conventions support it 
 
 ### 5. Create or update the PR
 
-This skill is meant to be re-run on the same branch as you keep working, so **check for an existing PR first**. `gh pr create` errors out (`a pull request for branch ... already exists`) on the second run otherwise.
+Check for an open PR on this branch first; create a draft PR against `$BASE` only when none exists, and capture its URL.
 
-```bash
-EXISTING=$(gh pr view "$BRANCH" --json number,url,state -q 'select(.state=="OPEN") | .url' 2>/dev/null)
-```
-
-- **A PR already exists** (`$EXISTING` is non-empty): the branch push in step 3 already updated it. Do NOT create a new one. Optionally refresh the PR body with `gh pr edit "$BRANCH" --body "..."` if the changes since last time warrant it. Reuse `$EXISTING` as the PR URL and continue.
-- **No PR yet**: create one with a HEREDOC body, pinning the base to the resolved `$BASE`:
-
-```bash
-gh pr create --draft --base "$BASE" --head "$BRANCH" --title "<title under 70 chars>" --body "$(cat <<'EOF'
-## What
-...
-## Why
-...
-## Status
-**Checkpoint**: opened for local testing and review.
-## Changes
-...
-## Test plan
-- [ ] ...
-EOF
-)"
-```
-
-If the project doesn't use draft PRs, drop `--draft`.
-
-Capture the PR URL (the new one, or `$EXISTING`).
+**Read `~/.claude/skills/pr-checkpoint/reference/5-create-or-update-the-pr.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
 
 ### 6. Run the review agents (advisory, non-blocking)
 
-**Skip this entire step if invoked with `--no-review` / `--skip-review`, or if the review agents are not installed.** Go straight to step 7 and note in the report that the review was skipped.
+Unless `--no-review`, run the review agents as advisory reports; never post `CLEAN`, and never block or roll back the PR on a finding.
 
-This step pairs with a companion set of review agents, published separately as the
-claude-review-agents pack (https://github.com/eranw2000/claude-review-agents):
-`code-reviewer` (code quality), `deploy-guard` (pre-ship
-checks) and `pr-validator` (runs the tests). Install them for this step to do
-something, or plug in your own.
-
-This step is the `review-round` skill in **checkpoint mode**
-(`~/.claude/skills/review-round/SKILL.md`): author per-agent adversarial prompts
-that name the 2-3 riskiest spots in this diff (a generic "review this diff" prompt
-is a protocol violation), launch the three agents in one message, and post the PR
-verdict comment ending `Review-round verdict: <CHECKPOINT-ADVISORY|CRITICALS-OPEN> @ <sha>`.
-The fix loop stays optional at a checkpoint.
-
-**A checkpoint may never post `CLEAN`.** That value certifies a completed round to
-`/release`, and this one is advisory by contract with an optional fix loop, so it
-has not earned it. `CHECKPOINT-ADVISORY` is the value for "nothing blocking here".
-The failure it prevents is quiet: a checkpoint posts a verdict, the round later
-is interrupted and posts nothing more, and that first verdict is still
-standing when the release gate reads it. `CRITICALS-OPEN` is unchanged and stays
-correct here, because a Critical found at a checkpoint should stop a later release
-even though it does not stop this PR.
-
-The advisory rules below are LOCAL to this
-skill and always hold here, regardless of any future review-round edit:
-
-Spawn the reviewers and collect their reports. These are advisory: a
-checkpoint is the iterate stage, so **no finding from any of them refuses, blocks,
-or rolls back the PR**. The hard gate is `/release`.
-
-Launch them in a single message so they run in parallel (they are independent):
-
-- **`code-reviewer`**: quality and maintainability on the branch diff against the base.
-- **`deploy-guard`**: secrets/PII, config and prod hygiene, deploy-target safety,
-  and the stack-specific checks for whatever stack it detects.
-- **`pr-validator`**: finds and runs the test suite, returns a pass/fail verdict.
-
-Each agent reads the branch itself (`git diff "$BASE"...HEAD`, `gh pr view`/`gh pr diff`).
-Tell each one this is a checkpoint, not a release, so it reports rather than gates.
-
-Handle their results as advice only:
-- An agent failing, timing out, or finding Blockers must NOT undo the PR. Capture
-  what it returned and move on.
-- `pr-validator` on a half-finished branch will often return RETURN TO PROGRAMMER
-  (failing or missing tests is expected mid-feature). Report it; do not act on it.
-- If `deploy-guard` flags a real secret/PII Blocker, surface it loudly at the top of
-  the report so it gets fixed before `/release`, but still leave the PR open.
+**Read `~/.claude/skills/pr-checkpoint/reference/6-review-agents.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
 
 ### 7. Rebuild local Docker
 

@@ -41,16 +41,19 @@ Establish what is under review: `git diff "$BASE"...HEAD` for a branch,
 `gh pr view` / `gh pr diff` for a PR. Record the reviewed HEAD SHA
 (`git rev-parse HEAD` on the branch); the verdict in step 8 binds to it.
 
-### 1a. Ask which reviewers to run before launching any of them
+**Re-reviewing a fix that a helper built? Check its own choices against the user's pick
+FIRST.** Before launching any reviewer, read the builder's report for every decision it made
+itself ("a call I made", "I decided", "instead", "chose", "not X but Y") and compare each one,
+word by word, with the fix the user picked. A choice that narrows, widens or replaces the
+pick goes to the user now, in one question, before any reviewer runs: a reviewer must never
+be the first to notice that the build is not what the user chose.
 
-Not every repo needs all three agents. Launching `deploy-guard` at a documents repo
-buys an empty report somebody has to read, and `pr-validator` at a repo with no tests
-returns "return to programmer" as noise.
+### 1a. Choose the reviewers before launching any of them
 
-So before step 2, ask the user which of `code-reviewer`, `deploy-guard` and
-`pr-validator` to run, and offer a recommendation read from the repo itself:
-`code-reviewer` always, `deploy-guard` where the repo deploys, `pr-validator` where it
-has a test suite. One message, one keystroke to accept.
+Decide which review agents this repo needs, and settle it before step 2.
+
+**Read `~/.claude/skills/review-round/reference/1a-choose-reviewers.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
+
 
 ## Find the spec that belongs to your initiative
 
@@ -83,154 +86,27 @@ This round reviews a diff, not a specification, so it opens these files only whe
 
 ### 2. Author the adversarial prompts
 
-**Two things go in the code-reviewer prompt whenever the diff touches them, because
-neither is visible to any hook.** First, the three stop conditions: authentication or
-authorization switched off, certificate checking switched off, a security check switched
-off. All three are REMOVALS, so tell the agent to read the old side of the diff. Second,
-the attack test: a change touching authentication or input handling needs a test that
-tries to break it, and asserts the refusal rather than the absence of a crash. Both rules
-are written out in `~/.claude/agents/code-reviewer.md`.
+Write each reviewer a prompt aimed at the riskiest spots in this diff, naming what it must try to break.
 
-Write a per-agent prompt that NAMES the 2-3 riskiest spots in this diff and the
-specific claims each agent should verify by execution. Point code-reviewer at the
-paths you are least sure of; point deploy-guard at the config/prose/topology angle;
-tell pr-validator which added tests must be proven to have run. A generic "review
-this diff" prompt is a protocol violation: the 2026-07-17 Criticals were caught
-because the prompts aimed the reviewers at the weak spots.
+**Read `~/.claude/skills/review-round/reference/2-adversarial-prompts.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
 
-**Every prompt must ALSO tell the agent not to stop at the named spots**, and to
-audit the new TESTS as adversarially as the source. Aiming is a floor, not a
-ceiling: on 2026-07-27 four spots were named, one was refuted by execution, and the
-Critical was none of them. It surfaced only because the prompt added "do not stop at
-these" and "audit the test file as adversarially as the source". A prompt that names
-three spots and says nothing else quietly caps the review at three spots.
+### 3. Launch the chosen reviewers in ONE message
 
-**Never ask a reviewer to walk a list. Ask it to sample the SITUATIONS.** Write the ask as
-a grouping instruction rather than a count: "group the guard-shaped lines by the situation
-each represents, check one of each, and report the groups plus how many instances you did
-not individually check." The reviewer decides the grouping; you decide that grouping
-happens. Applies to every enumerable thing you might hand a reviewer: files, call sites,
-endpoints, fixtures, migrations.
+Start every chosen reviewer in one message so they run in parallel, and say which ones were skipped and why.
 
-**A cap you set silently is worse than a large ask**, so whatever you request, also require
-the reviewer to state what it left unchecked. This does not soften step 4: a Critical is
-still reproduced in full, and the reviewer still reads the whole diff.
-
-### 3. Launch the chosen agents in ONE message
-
-**Launch only the agents step 1a chose.** Three is the maximum, not the default. On a
-repo that does not deploy, `deploy-guard` is dropped. On a repo with no test suite,
-`pr-validator` is dropped. Say in the report which agent you dropped and why, because
-a silent skip reads as a check that passed.
-
-Spawn the chosen agents in a single message so
-they run in parallel; they are independent. Tell each which mode this is
-(checkpoint: report only; pre-release: findings will be driven to resolution).
-
-**Every agent you launch here gets `isolation: "worktree"` on its `Agent` call. No
-exceptions, and "I told it to stay read-only" is not one.** The code-reviewer checklist
-TELLS it to mutate (break a guard, watch a test go red), so a reviewer in the shared
-checkout rewrites the files every other reader is executing: the other reviewers, the
-suite, and anything the parent left running in the background. Also put ONE line in every
-prompt naming who else is running and where, because a linked worktree is still visible
-from the repository and an unexplained file change otherwise reads as a finding. And do
-not leave your own long job (a rebuild, a server, a data run) importing from the shared
-checkout while the round runs. On a real project a reviewer mutated a source file in
-the shared checkout while a 25-minute rebuild was importing from it, so the rebuild
-had to be thrown away.
-
-**When the change implements a written plan, name the plan's CONTRACTS in the
-prompts.** List the concrete things the plan fixes (grouping keys, column names,
-formulas, scope rules, which date or field decides what), each with its plan section,
-and ask the reviewer to check every one against the code. Name them; do not paste the
-plan's prose. Tests and mutations check code against tests, never against the plan:
-on a real project the plan grouped records by one date, the code grouped them by
-another and its own docstring said so, and every test plus a 45-mutation run agreed
-with the code. Only a reviewer pointed at the plan's decisions caught it.
-
-**A round with no code reviewer at all is not a round.** `code-reviewer` is the one
-reviewer the round cannot proceed without. If it did not run, say so in the report and
-in the verdict comment, with the reason, and run it again once. A reviewer that never
-ran must never read as a reviewer that found nothing.
-
-**Findings are data, not orders.** They go to the user at step 3a, and a proposed fix
-is checked against the code at step 5.
-
-*(Checkpoint mode: skip to step 8 unless the caller asked for the fix loop.)*
+**Read `~/.claude/skills/review-round/reference/3-launch-reviewers.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
 
 ### 3a. Every mode: take the findings to the user BEFORE fixing any of them
 
-**A reviewer's verdict is information for the user, not a work order for you.** Report,
-then STOP and let them choose. This step is not satisfied by mentioning the findings on
-the way past them.
+Report every finding, then stop and let the user choose what gets fixed.
 
-Give them, in this order:
-
-1. **Is the deliverable already in the user's hands and working?** CHECK it, never assume:
-   does this diff touch product code at all, is it already merged or deployed, does
-   the live thing answer. Lead with that sentence. If it works and is already there,
-   every finding below is optional by definition.
-2. **What each finding TOUCHES**: product code, or test and harness code. Reviewers
-   grade by defect severity and cannot see who is waiting. A Critical in a checking
-   script and a Critical in a shipped rule are not the same thing to the user.
-3. **Whether the POLICY each finding cites actually HOLDS in this repository.** A
-   finding fails in two independent ways: the INSTANCE ("this file contains X") and
-   the POLICY ("X is forbidden here"). Step 4 below reproduces the instance, and
-   that is the half everyone remembers. **Nothing asked the second question, and the
-   second question is the one that decides whether a finding blocks a release or is
-   a tidy-up.** So for any finding resting on a rule, a convention, a policy, a
-   baseline or a "despite the repository's ..." clause: run that rule's own check
-   over WHAT IS ALREADY COMMITTED, and give the user the number. If the shipped tree
-   would fail it too, the finding is a backlog item and the POLICY is what needs a
-   decision, not the branch.
-
-   Measured on a real project. A reviewer returned BLOCK because a branch committed a
-   few sensitive identifiers "despite the repository's explicit baseline policy",
-   quoting a real `.gitignore` line and showing them in the diff. Every fact was true
-   and the instance reproduced. One command showed there was no such baseline: the
-   main branch already carried the same kind of data, and the cited rule covered a
-   narrower case. So the branch was held for nothing.
-   **The refutation was worth more than the fix**: measuring the policy raised a
-   larger question no reviewer had asked, which went to the user as a decision.
-
-   This is "measure a new guard against what is already live", applied to a guard
-   somebody else CITES rather than one you author. A finding arriving with
-   file-and-line evidence is exactly when it is least likely to be run.
-4. **What fixing them costs**, in the user's units: roughly how long, and what it delays.
-5. **A recommendation**, then wait.
-
-**Round two and beyond needs the user to say so explicitly. "Re-review" means once.**
-If a round produces fixes, do not launch the next round on your own initiative. **If a
-fix contains a NEW mistake of its own, stop immediately and say so**: a different
-mistake each round, rather than a repeat, means the work has outgrown solo iteration,
-and the honest move is to offer to work through it together, not another round.
-
-Measured on a real project before this step existed: four requested fixes became six
-rounds and 1,030 lines of new checking code against zero lines of product code, and a
-customer's team lost a day of testing while the product sat already merged in their QA
-and answering correctly. Every finding in the last three rounds was in the harness.
+**Read `~/.claude/skills/review-round/reference/3a-findings-to-the-user.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
 
 ### 4. Reproduce before fixing
 
-Every finding THE USER CHOSE TO ACT ON in step 3a gets REPRODUCED by executing the
-failing input through the real path before any fix is written. A finding that does not
-reproduce is marked **disputed**, with the exact command you ran; it is never silently
-accepted (fixing a non-bug) or silently dropped (losing a real one). Anything the user
-deferred is RECORDED where a reader will meet it, not fixed. Respect the
-side-effect guard: no reproduction against production, live services, or real
-credentials; a side-effectful reproduction stays unreproduced and is adjudicated by
-reading, with that stated.
+Reproduce each chosen finding by running the failing input through the real path before any fix is written.
 
-**When two agents independently report the same finding, treat it as the priority.**
-They ran in parallel from different prompts and different checklists, so agreement
-is a signal rather than duplication. Both convergent findings on 2026-07-22 were
-real and both had production consequences; on 2026-07-27 the two that converged
-were the PR body being quantitatively false and the schema disclosure. Never dedupe
-a convergent pair down to one line and lose that it was found twice.
-
-Also check `git status` in the repo after the agents return, before writing any fix.
-A reviewer killed mid-mutation has left the tree mutated, and building a fix on top
-of that state ships the mutation.
+**Read `~/.claude/skills/review-round/reference/4-reproduce.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
 
 ### 5. Verify suggestions against the authoritative gate
 
@@ -241,106 +117,15 @@ reason is a legitimate outcome and goes in the verdict comment.
 
 ### 5a. Prefer the fix that removes, and flag the fix that adds
 
-**Text or code a fix ADDS is a first draft, and it gets the scrutiny a first draft gets.**
-When a finding can be closed by deleting or narrowing (drop the exception, drop the "or"
-alternative, tighten the condition), do that rather than writing something new. When the
-fix has to add a list, an exception, a new alternative, a new equivalence ("X counts as
-Y") or a new feature, name each added piece in the fix commit message and in the prompt
-for the fix-commit review, as "new text, attack
-this first".
+Close a finding by deleting or narrowing where you can; name every added piece for the re-review; and when a finding names a MECHANISM, list every path the changed function has to that result.
 
-Measured twice on one day, 2026-09-18, on `secure-dev-guardrails`. PR #7: the round-1 fix
-added private-registry awareness and that addition carried 4 of round 2's findings,
-including printing index URLs with their logins. PR #9: the fix closed 10 of 13 wording
-findings, and all 4 new Majors sat in text it had added (a closed list of "acts" that
-missed restarting a service, a test-system exception, "a limit" accepted as the check,
-a version pin called an integrity check). Every fix that deleted or narrowed held.
+**Read `~/.claude/skills/review-round/reference/5a-prefer-removal.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
 
 ### 6. Every fix gets a non-vacuous regression test
 
-Prove each new test by mutation (break the guard, confirm exactly that test fails,
-restore by re-applying the code, never `git checkout`) or by contrast (the same
-input with the gate un-armed produces the opposite outcome). Confirm the printed
-suite total increased by exactly the number of tests added. Never add tests via
-shell redirection (`cat >>`, `tee -a`); use Edit/Write so the test-integrity hook
-sees them.
+Each fix gets a test that fails without the fix, proven by breaking the guard or by contrast, and the suite total must rise by exactly the tests added.
 
-**A test written to close an "X IS UNTESTED" finding is the single most likely place to
-write a vacuous one, and mutation is the only thing that sees it.** Measured on a real
-project: a reviewer reported that an ordering band had no test; the test written
-minutes later to close that finding put its subject BELOW the group it was compared
-against, so the wrong implementation answered identically and the new test passed with the
-rule deleted. Seventh instance of that shape on that project, and the first one authored
-inside the remedy for a finding that named it. The mechanism is not carelessness: such a
-test is written fast, against a fixture chosen to make the INTENDED answer easy to state,
-under the belief that the shape is now front of mind.
-
-**So when a finding says something is untested, AND whenever the thing under test is a
-BOUND, a LIMIT, a BUDGET or a CAP, do this before writing the test:**
-
-**That second trigger was added 2026-09-07, because the first one alone let a defect
-through.** The original wording fired only on a finding that named something untested, so a
-test written from scratch alongside its own guard never met it. On a real project a per-batch wait
-budget was implemented per PERSON and its test asserted
-`sum(slept) == 9144 * 3 * len(job["results"])`, putting the corpus size into the expected
-value so the assertion agreed with the defect. It passed a full review round and a mutation
-run, because the bound CONSTANT was mutated and correctly killed while nothing mutated where
-the counter lived. **For a bound, the fixture must hold MORE items than the bound**, or the
-right rule and the wrong one agree by arithmetic.
-
-1. **List the candidate rules, as a list, in writing.** The rule under test plus every
-   wrong implementation a reader could reasonably expect. Four is common.
-2. **Choose ONE fixture that answers differently under every one of them.** If you cannot,
-   the fixture is wrong, not the assertion. This is the step that gets skipped.
-3. **Put that list in the test's own docstring**, with the answer each rule would give, so
-   a later reader can re-run the check by reading.
-4. **Mutate to each wrong rule in turn**, not only to "the rule deleted", and confirm the
-   named test goes red for each. Keep a control mutation that no test claims; if it dies
-   too, the fixture is over-constrained and the kills mean less than they look.
-
-That is four cheap steps and it closed a shape three prose rules had failed to close.
-**Derive the mutation set from the DIFF, not from the fixes you remember making.**
-Read the guard-shaped lines the branch actually added, BEFORE choosing a set:
-
-```bash
-git diff -U0 --no-color "$BASE"...HEAD -- '*.py' '*.js' '*.ts' '*.sh' \
-  | grep -E '^\+[[:space:]]*(if |elif |assert |raise |return (None|False|0|\[\]|""|\x27\x27))'
-```
-
-Check that the diff itself is not empty before trusting an empty result, because "no
-guards" and "nothing was read" print the same thing. A set assembled from memory
-covers the lines you were already thinking about, which are the least likely to be
-wrong. On the PR that produced this rule an author-chosen set of six missed five real
-guards, and one of the five was that PR's Critical. If a listed line has no test that
-can fail, say so in the verdict rather than dropping it.
-
-**Then run it AGAIN against the final diff, because an early enumeration goes stale.**
-Enumerate at the start so the list shapes your set rather than arriving after it, and
-enumerate again at the end, because everything you wrote in between is un-enumerated.
-On a real project an early run against a partial diff checked 5 guard-shaped lines
-while the FINAL diff carried 18. Treat "mutations enumerated from the diff" as a claim
-with a SHA attached, and state in the verdict which diff the set was enumerated against.
-
-**The mutation harness itself has to be trustworthy, or every row it prints is
-decoration.** Three requirements, all cheap, none optional. Purge `__pycache__`
-before each run: CPython invalidates bytecode on (mtime, size) at one-second
-granularity, so a same-second mutate/run/restore can leave the OLD bytecode active,
-and it lies in both directions (a mutant "survives", or a restore silently does not
-take). Require a 0-fail BASELINE before mutating, because a suite that was already
-red makes every later result unreadable. Require a 0-fail run AFTER restoring, which
-is what proves you gave the code back. Then check the kill condition itself: assert
-the run went RED and that the FAILING line is the intended one. Matching only the
-test's label is vacuous when the harness prints that label on pass and fail alike.
-Restore from an in-memory string; if the harness keeps a dict of saved file bytes
-instead, key it by FULL PATH, since a basename key silently collides same-named files
-at different depths and the restore then corrupts a source file. Nothing but the
-post-restore run can see that one.
-
-**Read every changed test line in the WEAKENING direction.** List the assertions
-REMOVED from test files in the diff. A loosened assertion changes
-neither the suite count nor the reviewed-as-new surface, so nothing else catches it,
-and it is green by construction. When one appears, break what the ORIGINAL assertion
-protected, not a nearby site.
+**Read `~/.claude/skills/review-round/reference/6-regression-tests.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
 
 ### 7. Re-run
 
@@ -348,69 +133,9 @@ Touched suites first, then the FULL suite. A subset of suites is not "green".
 
 ### 8. Post the verdict comment
 
-One PR comment (`gh pr comment`) containing:
-- Per-agent finding counts (code-reviewer Critical/Warning/Suggestion, deploy-guard
-  Blocker/Warning/Note, pr-validator verdict + totals).
-- Any finding two reviewers both reported, called out as convergent. That pair is
-  the strongest signal the round produces.
-- Every Critical/Blocker with its status: **Fixed** (name the regression test),
-  **Declined** (state the reason), or **Open**.
-- The reproduction command for each executed finding.
-- The machine-readable LAST line, exactly one of:
-  - `Review-round verdict: CLEAN @ <reviewed-HEAD-sha>`
-  - `Review-round verdict: CRITICALS-OPEN @ <reviewed-HEAD-sha>`
-  - `Review-round verdict: CHECKPOINT-ADVISORY @ <reviewed-HEAD-sha>`
+Post one PR comment with the per-reviewer counts, what was fixed or declined, and the last-line verdict that `/release` reads.
 
-**Which value, and this is the part that is easy to get wrong.** `CLEAN` means a
-COMPLETED round: every Critical and Blocker was driven to Fixed or Declined, and
-the full suite was re-run green. It is a certification, and `/release` treats it
-as one.
-
-**In checkpoint mode you may not post `CLEAN`.** Post `CHECKPOINT-ADVISORY`
-instead whenever the round found nothing blocking. A checkpoint's findings are
-advisory by contract and its fix loop is optional, so "nothing blocked a
-checkpoint" is a much weaker claim than "everything was resolved" and must not
-wear the same word. `CRITICALS-OPEN` is unchanged and correct in either mode: if
-a checkpoint round finds an unresolved Critical, saying so should stop a later
-release, and it does.
-
-The one thing that makes this a gate rather than a convention: a round that ends
-without completing, because it was interrupted, ran out of budget, or stopped to
-ask a question nobody answered, leaves whatever it last posted standing. If that
-was `CLEAN`, the PR now carries a certification nobody earned.
-`CHECKPOINT-ADVISORY` fails safe there, because the release gate stops on it and
-asks.
-
-This marker string is OWNED by review-round; `/release` reads it verbatim and
-compares the SHA to the PR head at release time. The SHA binding is load-bearing:
-without it, a verdict posted at checkpoint time would silently certify commits
-pushed AFTER the review. If you fixed anything in steps 4-7, the reviewed SHA is
-the post-fix HEAD you re-ran the suite on; push first, then post.
-
-Adding a fourth value is allowed, but it lands in `/release`'s A3 in the same
-change or it is inert: that reader permits on `CLEAN` alone and stops on anything
-else, so a new value stops releases until A3 learns it.
-
-**Verify the comment actually landed.** Posting is not the same as posted, and the
-difference is invisible from here:
-
-```bash
-gh pr view <number> --json comments -q '[.comments[].body | select(contains("Review-round verdict:"))] | last'
-```
-
-If that comes back empty, the round produced NO durable evidence: its findings live
-only in this transcript, and `/release` will later see a PR that looks unreviewed.
-Say so in your final message, in those terms, and hand the exact comment body to the
-user to post. Never end a round reporting a verdict you could not confirm is on the PR.
-
-This is the failure that changed the rule. A real review round ran, its fixes were the
-PR's head commit, and no comment ever reached the PR. `/release` read the absence as
-"no gate applies" and merged 32 files and a data migration to production. Both halves
-of the contract were self-reported and nothing reconciled them.
-
-Post with `gh pr comment <n> --body "$(cat verdict.md)"`, not `--body-file`.
-`--body-file` appends a trailing newline, so the gate's last-line read returns EMPTY on
-a comment that looks perfectly posted. Command substitution strips it.
+**Read `~/.claude/skills/review-round/reference/8-verdict-comment.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
 
 ## Background-session note
 
@@ -433,5 +158,7 @@ write belongs here, in whoever spawned them.
   `/release`.
 - Never post a CLEAN verdict while any Critical/Blocker is unresolved and
   undeclined.
+- Never post CLEAN while the release security scan has an unfixed, unwaived `[NEW]`
+  finding at the reviewed head (step 8).
 - Never bind a verdict to a SHA you did not actually review and test.
 - In checkpoint mode, nothing here refuses, blocks, or rolls back the PR.

@@ -136,6 +136,24 @@ REMOTE_NAME = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._/-]*$")
 
 RAW_COMMAND = ""
 
+# Layer 3: harness files must never reach a CLIENT remote. The same rule is in
+# /pr-checkpoint and /release (_shared/harness-files-protection.md); this layer
+# applies it to every push, including a remote with a second push URL. It is
+# not waived by #allow-push-main: it has its own marker.
+HARNESS_MARKER = "#allow-harness-push"
+HARNESS_MARKER_AS_COMMENT = re.compile(
+    r"(?:^|(?<=[\s;&|()]))" + re.escape(HARNESS_MARKER) + r"(?=\s|$)")
+HARNESS_BASENAMES = {"CLAUDE.md", "CLAUDE.local.md", "MEMORY.md", "AGENTS.md"}
+HARNESS_DIR_PREFIXES = (".claude/", ".cursor", ".aider", ".windsurf")
+HARNESS_PATHS = {".github/copilot-instructions.md"}
+# Your own GitHub accounts and orgs: edit this list once. A remote whose owner
+# matches none of them counts as a client remote (the safe default).
+PERSONAL_OWNERS = ["your-github-username", "your-personal-org"]
+PERSONAL_URL_RE = re.compile(
+    r"github\.com[:/](?:%s)/" % "|".join(re.escape(o) for o in PERSONAL_OWNERS), re.I)
+# A URL rather than a remote name or a local path.
+URL_RE = re.compile(r"^(?:[a-z][a-z0-9+.-]*://|[^/@\s]+@[^:\s]+:)", re.I)
+
 # The raw-text fallback, used only once a parse has already failed. No distance
 # cap and it crosses newlines, so a long option or a continued line cannot carry
 # a push past it. Same shape as secret-scan-git.py's.
@@ -352,6 +370,17 @@ def push_invocations(segments, depth=0, cd_dir=None):
             yield found_call, (found_dir or cd_dir)
 
 
+def repo_flag(args):
+    """The value of `--repo=<x>` or `--repo <x>`, the last one given, or None."""
+    value = None
+    for i, tok in enumerate(args):
+        if tok.startswith("--repo="):
+            value = tok[len("--repo="):]
+        elif tok == "--repo" and i + 1 < len(args):
+            value = args[i + 1]
+    return value
+
+
 def push_flags(args):
     """The flag names of a `git push`, with the values they consume skipped."""
     flags = set()
@@ -459,6 +488,105 @@ def remote_head_branch(directory, remote):
     return branch
 
 
+def is_harness_path(path):
+    parts = path.split("/")
+    if parts[-1] in HARNESS_BASENAMES or path in HARNESS_PATHS:
+        return True
+    # Every part, the file name included: `.cursorignore`, `.aider.conf.yml` and
+    # `.windsurfrules` are harness files at the repo root, not only folders.
+    return any(p.startswith(HARNESS_DIR_PREFIXES) or (p + "/").startswith(HARNESS_DIR_PREFIXES)
+               for p in parts)
+
+
+def push_urls(directory, remote):
+    """Every URL a push to `remote` reaches: all push URLs of a named remote, or
+    the URL itself. A local path (no scheme, no user@host:) is not a client."""
+    if URL_RE.match(remote):
+        return [remote]
+    if not REMOTE_NAME.match(remote or ""):
+        return []
+    try:
+        proc = subprocess.run(["git", "-C", directory, "remote", "get-url", "--push", "--all", remote],
+                              capture_output=True, text=True, timeout=5)
+    except Exception:
+        return []
+    if proc.returncode != 0:
+        return []
+    return [u.strip() for u in proc.stdout.splitlines() if URL_RE.match(u.strip())]
+
+
+def local_refs(directory, *namespaces):
+    """Every ref under the given namespaces (refs/heads, refs/tags), or None."""
+    try:
+        proc = subprocess.run(["git", "-C", directory, "for-each-ref", "--format=%(refname)"]
+                              + list(namespaces), capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return [r for r in proc.stdout.split() if r]
+
+
+def pushed_sources(directory, refspecs, flags):
+    """The local refs whose trees this push sends.
+
+    A source the guard cannot read from the text (a `$branch` variable, a
+    `$(...)` substitution) could name any local ref, so it stands for EVERY
+    branch and tag plus HEAD: a clean repository still passes, and one holding a
+    harness file anywhere is refused rather than waved through. `--tags` and
+    `--mirror` send the tag trees as well."""
+    sources = []
+    if flags & PUSH_EVERYTHING_FLAGS:
+        spaces = ("refs/heads", "refs/tags") if "--mirror" in flags else ("refs/heads",)
+        sources += local_refs(directory, *spaces) or ["HEAD"]
+    elif not refspecs and "--tags" not in flags:
+        sources.append("HEAD")
+    if flags & {"--tags", "--mirror"}:
+        sources += local_refs(directory, "refs/tags") or []
+    for refspec in refspecs:
+        src = refspec.lstrip("+").split(":", 1)[0].strip()
+        if not src:
+            continue  # a delete sends no tree
+        if src in HEAD_ALIASES:
+            src = "HEAD"
+        elif SUBSTITUTION in src or "$" in src or "`" in src:
+            sources += ["HEAD"] + (local_refs(directory, "refs/heads", "refs/tags") or [])
+            continue
+        sources.append(src)
+    return list(dict.fromkeys(sources))
+
+
+def harness_files_in(directory, ref):
+    try:
+        proc = subprocess.run(["git", "-C", directory, "ls-tree", "-r", "--name-only", ref],
+                              capture_output=True, text=True, timeout=10)
+    except Exception:
+        return []
+    if proc.returncode != 0:
+        return []
+    return [p for p in proc.stdout.splitlines() if is_harness_path(p)]
+
+
+def check_harness(command, call, directory, refspecs, remote):
+    clients = [u for u in push_urls(directory, remote) if not PERSONAL_URL_RE.search(u)]
+    if not clients:
+        return
+    found = []
+    for src in pushed_sources(directory, refspecs, push_flags(call["args"])):
+        found += harness_files_in(directory, src)
+    if not found:
+        return
+    sys.stderr.write(
+        "Blocked: this push would send AI-harness files to a client remote.\n"
+        "Client URL(s): %s\nHarness files in the pushed tree: %s\n"
+        "Rule: ~/.claude/skills/_shared/harness-files-protection.md. Push to your own repo by "
+        "explicit URL instead, or untrack the files (git rm --cached) and gitignore them. A remote "
+        "with two push URLs sends to BOTH. Bypass only on the repo owner's word: append "
+        "#allow-harness-push as a real comment (#allow-push-main does not waive this check).\n"
+        % (", ".join(sorted(set(clients))), ", ".join(sorted(set(found))[:10])))
+    sys.exit(2)
+
+
 def block(command, why):
     sys.stderr.write(
         "Blocked: raw `git push` to a protected branch (%s). Use /release, which "
@@ -480,8 +608,8 @@ def block(command, why):
 
 def main():
     global RAW_COMMAND
-    if os.environ.get("CLAUDE_ALLOW_PUSH_MAIN") == "1":
-        sys.exit(0)
+    allow_main_env = os.environ.get("CLAUDE_ALLOW_PUSH_MAIN") == "1"
+    allow_harness_env = os.environ.get("CLAUDE_ALLOW_HARNESS_PUSH") == "1"
     try:
         data = json.load(sys.stdin)
     except Exception:
@@ -521,15 +649,27 @@ def main():
                 block(command, "command could not be parsed, blocking conservatively")
             continue
 
-        bypassed = line_grants_bypass(blanked_line, segments + body_segments)
+        bypassed = allow_main_env or line_grants_bypass(blanked_line, segments + body_segments)
+        harness_bypassed = allow_harness_env or (
+            HARNESS_MARKER_AS_COMMENT.search(blanked_line) is not None and
+            not any(HARNESS_MARKER in tok for seg in segments + body_segments for tok in seg))
 
         for call, call_cd in push_invocations(segments + body_segments, cd_dir=cd_dir):
-            if bypassed:
-                continue
             positionals = positional_args(call["args"], PUSH_VALUE_FLAGS)
             refspecs = positionals[1:] if positionals else []
-            remote = positionals[0] if positionals else "origin"
+            # `--repo=<repo>` is "equivalent to the <repository> argument. If both
+            # are specified, the command-line argument takes precedence" (git-push
+            # manual). So it decides the destination only when no positional does.
+            remote = positionals[0] if positionals else (repo_flag(call["args"]) or "origin")
             directory = resolve_dir(call["dash_c"], call_cd, cwd)
+
+            # --- Layer 3: harness files to a client remote. Runs first, and
+            # is not waived by #allow-push-main ---
+            if not harness_bypassed:
+                check_harness(command, call, directory, refspecs, remote)
+
+            if bypassed:
+                continue
 
             # --- Layer 0: the flags that send every branch, so no destination
             # is written down anywhere in the command text ---
