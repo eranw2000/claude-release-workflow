@@ -41,12 +41,15 @@ Establish what is under review: `git diff "$BASE"...HEAD` for a branch,
 `gh pr view` / `gh pr diff` for a PR. Record the reviewed HEAD SHA
 (`git rev-parse HEAD` on the branch); the verdict in step 8 binds to it.
 
-**Re-reviewing a fix that a helper built? Check its own choices against the user's pick
-FIRST.** Before launching any reviewer, read the builder's report for every decision it made
-itself ("a call I made", "I decided", "instead", "chose", "not X but Y") and compare each one,
-word by word, with the fix the user picked. A choice that narrows, widens or replaces the
-pick goes to the user now, in one question, before any reviewer runs: a reviewer must never
-be the first to notice that the build is not what the user chose.
+**Stacked branch (base not main)?** First run this folder's `stacked_base_check.py
+--repo <worktree>`; 1: merge base, re-test; 2: stop.
+
+**Did a helper build it? Check it against the user's pick FIRST.** Before any reviewer runs,
+read the builder's report for every decision it made itself ("a call I made", "I decided",
+"instead", "chose", "not X but Y") AND each design line of the brief you gave it (a builder
+obeying a rewritten brief reports no choice), and compare both, word by word,
+with the pick or the recorded decision. Anything that narrows, widens or replaces it goes to
+the user now, in one question: a reviewer must never be the first to notice.
 
 ### 1a. Choose the reviewers before launching any of them
 

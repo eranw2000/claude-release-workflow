@@ -49,3 +49,51 @@ echo "re-pinned base_sha=$BASE_SHA"
 
 If another selected PR remains, go back to A3 with that number and run its whole iteration
 against this new `$BASE_SHA`. When none remains, continue to A5.
+
+**A STACKED set (a PR whose base is another selected PR's branch) needs a replay before its
+iteration, because a squash cuts the commit link.**
+Once the base PR is squashed, the next PR (built on the base's original commits)
+conflicts with main on the base's own lines, and it still targets the base's branch,
+so a merge would go to the wrong base.
+Before A3 for each such PR:
+
+```bash
+gh pr edit <number> --base "$BASE"                      # never merge into the old branch
+python3 ~/.claude/skills/release/restack.py preview --repo . --base "$BASE_SHA" --head <pr head>
+```
+
+Exit 0 (CLEAN) needs nothing more. Exit 1 (CONFLICTS) means the squash cut the link: with
+the PR branch checked out at its reviewed head, replay only its own commits and prove the
+code is unchanged:
+
+```bash
+python3 ~/.claude/skills/release/restack.py replay --repo <checkout> \
+  --old-base <the merged PR's head> --new-base "$BASE_SHA" --reviewed <pr head>
+```
+
+Exit 0 means the new head's tree equals the reviewed tree (or differs only in
+`.gitleaksignore` fingerprints it re-pointed and named, since a fingerprint carries a commit
+id and every rebase invalidates it). Push with `--force-with-lease`, post
+`Review-round verdict: CLEAN @ <new head>` citing the tree equality, then run this PR's
+whole iteration (A3 to A4) on the new head. **Exit 3 (the base holds more than the merged
+PR, or the replayed code differs) means the old verdict no longer describes what would
+ship: STOP and ask before going on.** Never re-post a verdict on a 3. Any exit 3 from `preview`
+means the same.
+
+**A stack that was MERGED UP, not rebased, needs `merge-ours` instead.**
+When a lower branch's review fixes are merged up into every branch above it and
+never rebased, `replay` exits 1: the rebase drops the merge commit that resolved those
+conflicts and stops on the first commit.
+The tell is
+`git merge-base --is-ancestor <the merged PR's head> <pr head>` exiting 0. Then, with the PR
+branch checked out at its reviewed head:
+
+```bash
+python3 ~/.claude/skills/release/restack.py merge-ours --repo <checkout> \
+  --old-base <the merged PR's head> --new-base "$BASE_SHA" --reviewed <pr head>
+```
+
+Exit 0 means the new head keeps the reviewed tree exactly and merges into main cleanly. No
+commit is rewritten, so push WITHOUT force, post `Review-round verdict: CLEAN @ <new head>`
+citing the tree equality (with the `Security scan:` line the verdict guard requires), then run
+this PR's whole iteration on the new head. Exit 3 means what it means for `replay`: STOP.

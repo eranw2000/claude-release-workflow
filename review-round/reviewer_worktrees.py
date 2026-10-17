@@ -192,6 +192,12 @@ def carried_paths(repo, names):
         rel = pathlib.PurePosixPath(name.strip().rstrip("/"))
         if not name.strip():
             raise RuntimeError("--with: empty path")
+        # A relative path inside the repo, nothing else: `copy / rel` with an absolute
+        # rel IS the original, and `..` climbs out of the copy, so carry() would write
+        # into, or remove, the real folder.
+        if rel.is_absolute() or ".." in rel.parts:
+            raise RuntimeError(f"--with {name}: give a path relative to the repository, "
+                               "with no `..`")
         if not os.path.lexists(repo / rel):
             raise RuntimeError(f"--with {name}: no such path in {repo}")
         ignored = subprocess.run(["git", "-C", str(repo), "check-ignore", "-q", str(rel)],

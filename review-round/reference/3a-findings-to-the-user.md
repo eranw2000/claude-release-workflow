@@ -37,7 +37,14 @@ Give them, in this order:
    somebody else CITES rather than one you author. A finding arriving with
    file-and-line evidence is exactly when it is least likely to be run.
 4. **What fixing them costs**, in the user's units: roughly how long, and what it delays.
-5. **A recommendation**, then wait.
+5. **From the second fix round on: the branch against what is LIVE.** Give the findings per
+   round by severity, and what the live version still carries (the open findings on main or
+   in production that this branch fixes). When the branch is already safer than what is live
+   and this round's findings are less severe than what it fixes, offer **ship the branch now,
+   park the rest** as an option, with the time each option costs, and recommend it when this
+   round has no Critical. Without this, every hand-over offers only "fix them", and a review
+   loop can run for rounds after the branch was already the safer thing to ship.
+6. **A recommendation**, then wait.
 
 **Round two and beyond needs the user to say so explicitly. "Re-review" means once.**
 If a round produces fixes, do not launch the next round on your own initiative. **If a
