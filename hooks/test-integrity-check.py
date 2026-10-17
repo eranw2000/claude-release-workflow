@@ -537,6 +537,44 @@ def _check_scratch_reads(tree):
     return findings
 
 
+# Check G: a Django test that only checks what a page does NOT show, for text that no
+# test in the file ever shows present. assertNotContains requires a 200, but it passes on
+# any 200 page that never renders the subject (another mode, another state), so it cannot
+# tell "fixed" from "not there". A presence check proves the page can show it: in the same
+# test, or a contrast twin in the same file that asserts the same text present.
+_ABSENCE_ONLY = {"assertNotContains"}
+_PRESENCE = {"assertContains", "assertInHTML", "assertTemplateUsed", "assertRedirects"}
+
+
+def _text_arg(call):
+    """The literal text an assertContains/assertNotContains looks for, or None."""
+    arg = call.args[1] if len(call.args) > 1 else next(
+        (k.value for k in call.keywords if k.arg == "text"), None)
+    return arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else None
+
+
+def _check_absence_only(tree):
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+    shown = {_text_arg(c) for c in calls if _call_name(c.func) == "assertContains"}
+    findings = []
+    for fn in ast.walk(tree):
+        if not (isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith("test")):
+            continue
+        mine = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
+        if _PRESENCE.intersection(_call_name(c.func) for c in mine):
+            continue
+        never = [t for t in (_text_arg(c) for c in mine if _call_name(c.func) in _ABSENCE_ONLY)
+                 if t is not None and t not in shown]
+        if never:
+            findings.append(
+                "ABSENCE-ONLY at line %d: %s checks only that %r is NOT on the page, and no "
+                "test in this file shows a page that has it. A page that never renders it "
+                "(another mode, another state) passes. Add an assertContains for something "
+                "that must be there, such as the field's label, or a contrast test where it "
+                "appears." % (fn.lineno, fn.name, never[0]))
+    return findings
+
+
 def analyze(path):
     """Return (status, findings) for one on-disk test file."""
     try:
@@ -555,6 +593,7 @@ def analyze(path):
     findings.extend(_check_scratch_reads(tree))
     findings.extend(_check_corpus_claims(tree, src))
     findings.extend(_check_corpus_scaled_expectations(tree))
+    findings.extend(_check_absence_only(tree))
 
     guard_idx = None
     guard = None
@@ -696,6 +735,65 @@ def _first_fixture_note(session_id, path):
     return True
 
 
+# Check F: a script that hands out PASS/FAIL verdicts, wherever it lives (a tools/
+# script is not a test file, so Checks A to E never see it).
+# A check that cannot fail reads exactly like one that passed. This fires the
+# first time a PASS/FAIL script is written in a session, which is the moment a
+# control is cheapest to add.
+VERDICT_STATE_DIR = os.environ.get("VERDICT_STATE_DIR") or os.path.expanduser(
+    "~/.claude/hooks/.verdict-script-seen")
+_VERDICT_TOKENS = (re.compile(r"""["']PASS["']"""), re.compile(r"""["']FAIL["']"""))
+VERDICT_NOTE = (
+    "VERIFICATION SCRIPT {path} hands out PASS/FAIL ({n} verdict line(s): {lines}). "
+    "Before trusting any PASS it prints, give EACH check a control that MUST FAIL and run "
+    "it once: the old code (run from its own folder, or `python -m` loads the new one), a "
+    "mutation of the guarded code, or an injected bad sample. Ask per check: could this "
+    "PASS if the behaviour were broken? (timing that never races, a file read before it "
+    "can exist, a kill that takes the case it should test with it). "
+    "(Shown once per file per session.)")
+
+
+def verdict_lines(src):
+    """Line numbers carrying a quoted PASS or FAIL token, or [] when the file lacks either."""
+    if not all(t.search(src) for t in _VERDICT_TOKENS):
+        return []
+    return [i for i, line in enumerate(src.splitlines(), 1)
+            if any(t.search(line) for t in _VERDICT_TOKENS)]
+
+
+def _first_seen(state_dir, session_id, path):
+    """True the first time this session meets `path` in `state_dir`."""
+    safe = "".join(c for c in str(session_id or "unknown") if c.isalnum() or c in "-_")
+    state = os.path.join(state_dir, (safe or "unknown") + ".json")
+    try:
+        seen = json.load(open(state))
+    except Exception:
+        seen = []
+    if path in seen:
+        return False
+    try:
+        os.makedirs(state_dir, exist_ok=True)
+        with open(state, "w") as fh:
+            json.dump(seen + [path], fh)
+    except Exception:
+        pass
+    return True
+
+
+def verdict_note(path, session_id):
+    if not path.endswith(".py") or _SKIP_DIRS.intersection(path.split(os.sep)):
+        return None
+    try:
+        src = open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return None
+    lines = verdict_lines(src)
+    if not lines or not _first_seen(VERDICT_STATE_DIR, session_id, path):
+        return None
+    shown = ", ".join(str(n) for n in lines[:6]) + (" ..." if len(lines) > 6 else "")
+    return VERDICT_NOTE.format(path=path, n=len(lines), lines=shown)
+
+
 def _emit(messages):
     print(json.dumps({
         "hookSpecificOutput": {
@@ -745,6 +843,10 @@ def run_hook():
 
     messages = []
     for path in paths:
+        if path and os.path.isfile(path):
+            note = verdict_note(path, data.get("session_id"))
+            if note:
+                messages.append(note)
         if not path or not eligible(path) or not os.path.isfile(path):
             continue
         status, findings = analyze(path)

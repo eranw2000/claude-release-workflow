@@ -20,9 +20,19 @@ the SESSION was launched in, not the one under review. When those differ, the co
 shared, and every reviewer still reports that it was isolated. Make the copies in the code repo:
 
 ```bash
+# --agents: the agents step 1a chose. --with: each ignored path the suite reads.
 python3 ~/.claude/skills/review-round/reviewer_worktrees.py setup \
-  --repo <code repo> --agents code-reviewer,pr-validator   # the agents step 1a chose
+  --repo <code repo> --agents code-reviewer,pr-validator \
+  --with staticfiles --with local_data
 ```
+
+**Pass a `--with` for every IGNORED path the test suite reads**: a build output
+(`staticfiles/`), a data folder, a fixture file kept out of git. Each is cloned into every
+copy (a symlink is followed, so a write in the copy cannot reach the original). The setup
+output ends with a `not-carried <paths>` line naming the ignored top-level paths the copies
+LACK; read it before launching, and rerun setup with `--with` for any the suite needs.
+Without them, a test runner reports dozens of errors the diff did not cause and
+certifies nothing.
 
 It prints, per agent, `<agent> <path>` and `pythonpath <agent> <value>`, then an
 `interpreter <path>` line when the repo has a `.venv` (a copy has none, because `.venv` is
@@ -49,7 +59,10 @@ Ignored folders (`.venv`, `node_modules`) are watched only for appearing or vani
 for changes inside. It names each file and reverts nothing: put the list in the step 3a
 report and treat the round's test results as suspect until the user decides. Exit 3 means
 the checkout is clean but a copy could not be removed (locked, or not a copy this setup
-made); say so in the report. It removes only folders inside the state file's own folder
+made); say so in the report. Exit 4 means the checkout is clean but a reviewer wrote files OUTSIDE its
+copy, beside the copies in the round's folder; each is printed as a `STRAY` line and left in
+place. Put them in the step 3a report, look at what they hold (a stray file can be a copy of
+a local env file), and treat that reviewer's output as having left its sandbox. It removes only folders inside the state file's own folder
 that git lists as detached worktrees, so a stale or edited state file cannot delete
 anything else.
 

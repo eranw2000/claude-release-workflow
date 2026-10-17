@@ -54,6 +54,18 @@ SEMGREP_CONFIG="${SECURITY_SCAN_SEMGREP_CONFIG:-p/default}"
 BATCH="${SECURITY_SCAN_BATCH:-400}"
 BASELINE="${SECURITY_SCAN_BASELINE:-$HOME/.claude/skills/_shared/security-standards/baseline.yml}"
 
+# The waiver register is YAML, and the first python3 on PATH need not have PyYAML.
+# Use the first interpreter that can import it
+# (SECURITY_SCAN_PYTHON first); with none, plain python3, and the scan says BASELINE UNREAD.
+pick_yaml_python () {
+  local p
+  for p in ${SECURITY_SCAN_PYTHON:-} $(type -ap python3) "$HOME/miniconda3/bin/python3" /usr/bin/python3; do
+    [ -x "$p" ] && "$p" -c 'import yaml' >/dev/null 2>&1 && { echo "$p"; return; }
+  done
+  echo python3
+}
+YAML_PY=$(pick_yaml_python)
+
 SOURCE_RE='\.(py|js|jsx|ts|tsx|java|cs|go|rb|php)$'
 MANIFEST_RE='(^|/)(requirements[^/]*\.txt|poetry\.lock|Pipfile\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|go\.mod|go\.sum|Gemfile\.lock|pom\.xml|composer\.lock|packages\.lock\.json)$'
 
@@ -240,7 +252,7 @@ if [ "$N_SOURCE" -gt 0 ]; then
       head -8 "$TMP/semgrep.err" | sed 's/^/    /'
       COULD_NOT=1
     else
-      python3 - "$TMP" "$NBATCH" "$BASELINE" "$TMP/added.json" "$TMP/repo_ids.txt" <<'PY' > "$TMP/semgrep.txt" 2>/dev/null
+      "$YAML_PY" - "$TMP" "$NBATCH" "$BASELINE" "$TMP/added.json" "$TMP/repo_ids.txt" <<'PY' > "$TMP/semgrep.txt" 2>/dev/null
 import datetime, fnmatch, json, os, sys
 
 tmp, nbatch, baseline_path = sys.argv[1], int(sys.argv[2]), sys.argv[3]

@@ -7,6 +7,20 @@ suite total increased by exactly the number of tests added. Never add tests via
 shell redirection (`cat >>`, `tee -a`); use Edit/Write so the test-integrity hook
 sees them.
 
+**A test for a REPORTED defect must also go red on the code that HAD the defect, not only on a
+mutation of your fix.** Check it out (or paste its lines into the test's harness) and run the
+test there. A mutation that deletes your new guard keeps everything else your fix changed, and
+the original code differs in exactly those things: wording, structure, the order of writes.
+
+**A fix to a rule that READS TEXT (a regex, a word list, an intent or same-thing test) is not
+proven by the reviewer's one sentence.** That sentence is one member of a phrasing family, and a
+fix written to it agrees with it by construction. Before re-review, run the changed rule over
+(a) the project's corpus of REAL messages when it keeps one (a golden master; report how many
+moved and read each move), and (b) at least four siblings of the reproduction that you did not
+derive from your fix: other punctuation, case, subject (we / a company / "exporters"), a
+question versus a statement, a two-word name for a code. Put the siblings in the test. Each
+sibling that changes verdict is a finding before the reviewer sees the fix.
+
 **A test written to close an "X IS UNTESTED" finding is the single most likely place to
 write a vacuous one, and mutation is the only thing that sees it.** Measured on a real
 project: a reviewer reported that an ordering band had no test; the test written

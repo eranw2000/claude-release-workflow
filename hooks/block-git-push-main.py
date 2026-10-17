@@ -163,6 +163,51 @@ LOOKS_LIKE_PUSH_RE = re.compile(r"\bgit\b[\s\S]*?\bpush\b")
 _REMOTE_HEAD_CACHE = {}
 
 
+def substitution_end(text, j):
+    """Index of the `)` that closes a `$(` whose body starts at `j`, or None.
+
+    The body is a fresh quoting context, as in bash: a `)` inside single or
+    double quotes, inside a nested `$( )` or inside backticks does not close
+    it, and a bare `(` (a subshell) needs its own `)`. Counting every `)`
+    would close `"$(grep -c '(^|/)x')"` at the quoted paren.
+    """
+    depth = 1
+    single = double = backtick = False
+    n = len(text)
+    while j < n:
+        ch = text[j]
+        nxt = text[j + 1] if j + 1 < n else ""
+        if ch == "\\" and not single:
+            j += 2
+            continue
+        if single:
+            single = ch != "'"
+        elif backtick:
+            backtick = ch != "`"
+        elif ch == "$" and nxt == "(":
+            inner = substitution_end(text, j + 2)
+            if inner is None:
+                return None
+            j = inner + 1
+            continue
+        elif double:
+            double = ch != '"'
+        elif ch == "'":
+            single = True
+        elif ch == '"':
+            double = True
+        elif ch == "`":
+            backtick = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return None
+
+
 def top_level_lines(text):
     """The command's LINES, each as a (raw, blanked) pair.
 
@@ -181,7 +226,6 @@ def top_level_lines(text):
     lines = []
     raw, blank = [], []
     single = double = backtick = False
-    depth = 0                     # $( ) nesting
     i, n = 0, len(text)
 
     def keep(ch, hidden):
@@ -193,7 +237,7 @@ def top_level_lines(text):
         nxt = text[i + 1] if i + 1 < n else ""
         # Computed BEFORE this character is classified, so the closing quote,
         # backtick or paren of a hidden run is blanked with the run it ends.
-        hidden = depth > 0 or backtick or single or double
+        hidden = backtick or single or double
 
         if ch == "\\" and not single and nxt:
             keep(ch, hidden)
@@ -206,11 +250,13 @@ def top_level_lines(text):
                 single = False
         elif ch == "$" and nxt == "(":
             # A substitution counts inside double quotes too, and never inside
-            # single quotes, which the branch above has already taken.
-            depth += 1
-            keep(ch, True)
-            keep(nxt, True)
-            i += 2
+            # single quotes, which the branch above has already taken. Its
+            # whole body is hidden; an unclosed one hides the rest of the text.
+            end = substitution_end(text, i + 2)
+            stop = n if end is None else end + 1
+            for c in text[i:stop]:
+                keep(c, True)
+            i = stop
             continue
         elif double:
             if ch == '"':
@@ -221,9 +267,7 @@ def top_level_lines(text):
             double = True
         elif ch == "`":
             backtick = not backtick
-        elif ch == ")" and depth > 0:
-            depth -= 1
-        elif ch == "\n" and depth == 0 and not backtick:
+        elif ch == "\n" and not backtick:
             if CONTINUES_LINE.search("".join(blank)):
                 keep(ch, False)
             else:
@@ -258,12 +302,11 @@ def flatten_substitutions(line):
     """
     flat, bodies, body = [], [], []
     single = double = backtick = False
-    depth = 0
     i, n = 0, len(line)
     while i < n:
         ch = line[i]
         nxt = line[i + 1] if i + 1 < n else ""
-        if depth == 0 and not backtick:
+        if not backtick:
             if ch == "\\" and not single and nxt:
                 flat.append(ch + nxt)
                 i += 2
@@ -271,8 +314,14 @@ def flatten_substitutions(line):
             if single:
                 single = ch != "'"
             elif ch == "$" and nxt == "(":
-                depth, body = 1, []
-                i += 2
+                end = substitution_end(line, i + 2)
+                if end is None:
+                    # Unbalanced: hand back the line untouched and let the
+                    # caller's conservative unparseable path decide.
+                    return line, []
+                bodies.append(line[i + 2:end])
+                flat.append(SUBSTITUTION)
+                i = end + 1
                 continue
             elif ch == "`":
                 backtick, body = True, []
@@ -292,22 +341,8 @@ def flatten_substitutions(line):
                 flat.append(SUBSTITUTION)
             else:
                 body.append(ch)
-        else:
-            if ch == "$" and nxt == "(":
-                depth += 1
-                body.append(ch + nxt)
-                i += 2
-                continue
-            if ch == ")":
-                depth -= 1
-                if depth == 0:
-                    bodies.append("".join(body))
-                    flat.append(SUBSTITUTION)
-                    i += 1
-                    continue
-            body.append(ch)
         i += 1
-    if depth or backtick:
+    if backtick:
         # Unbalanced: hand back the line untouched and let the caller's
         # conservative unparseable path decide.
         return line, []
@@ -372,12 +407,18 @@ def push_invocations(segments, depth=0, cd_dir=None):
 
 def repo_flag(args):
     """The value of `--repo=<x>` or `--repo <x>`, the last one given, or None."""
-    value = None
-    for i, tok in enumerate(args):
+    value, i = None, 0
+    while i < len(args):
+        tok = args[i]
+        if tok in ("-o", "--push-option"):
+            i += 2          # the next word is the option's value, even `--repo=...`
+            continue
         if tok.startswith("--repo="):
             value = tok[len("--repo="):]
         elif tok == "--repo" and i + 1 < len(args):
             value = args[i + 1]
+            i += 1
+        i += 1
     return value
 
 

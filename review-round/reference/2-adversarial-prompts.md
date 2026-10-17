@@ -26,6 +26,12 @@ and a new feature needs at least one test on a real sample. A fixture written in
 sitting as the code passes on exactly the cases its author already understood. Ask the
 reviewer to name each test whose input has no stated source.
 
+**Every prompt also asks: "What change is MISSING?"** For each
+new parameter, field or flag the diff adds or a test passes in, does every production
+caller actually send it? For each prompt, handler, schema or renderer the diff edits, how
+many siblings does it have, and how many changed? A diff cannot show a change that is not
+in it, so ask the reviewer to search outside the diff and report "changed N of M".
+
 **Never ask a reviewer to walk a list. Ask it to sample the SITUATIONS.** Write the ask as
 a grouping instruction rather than a count: "group the guard-shaped lines by the situation
 each represents, check one of each, and report the groups plus how many instances you did
