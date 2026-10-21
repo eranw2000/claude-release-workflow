@@ -29,8 +29,15 @@ Spawn the reviewers and collect their reports. These are advisory: a
 checkpoint is the iterate stage, so **no finding from any of them refuses, blocks,
 or rolls back the PR**. The hard gate is `/release`.
 
-Launch them in a single message so they run in parallel (they are independent):
+Launch them in a single message so they run in parallel (they are independent).
+`codex-reviewer` is a Bash call rather than an agent, so it goes in that same message:
 
+- **`codex-reviewer`** (when the Codex CLI is set up): a second model family on the same
+  diff, through headless Codex. Read `~/.claude/skills/_shared/codex-delegation.md` and
+  follow it. If it cannot run, say so with the runner's exit reason and make sure
+  `code-reviewer` runs. Exit 15 means the user set `CODEX_REVIEW=off`: no retry,
+  `code-reviewer` runs whatever was picked, and the report says
+  `Codex review: off (CODEX_REVIEW=off)`.
 - **`code-reviewer`**: quality and maintainability on the branch diff against the base.
 - **`deploy-guard`**: secrets/PII, config and prod hygiene, deploy-target safety,
   and the stack-specific checks for whatever stack it detects.

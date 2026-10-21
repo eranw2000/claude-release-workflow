@@ -82,6 +82,24 @@ on a real project the plan grouped records by one date, the code grouped them by
 another and its own docstring said so, and every test plus a 45-mutation run agreed
 with the code. Only a reviewer pointed at the plan's decisions caught it.
 
+**Launch `codex-reviewer` in that same message, when Codex is set up.** It is a second
+model family (OpenAI, through the headless Codex CLI), so it does not share Claude's
+blind spots, and a finding both families report is the strongest signal a round makes.
+It is a Bash call, not an agent, so it runs alongside the agents. Read
+`~/.claude/skills/_shared/codex-delegation.md` and follow it: a TYPED review
+(`--job-type review`, a fresh request ID, `--base` and `--head` bound to the diff, the
+checkout at that head and clean, `--out` a `.json` file outside the repo), then
+`codex_delegate.py verify --out <out> --request-id <id> --require-certified`, and read
+the findings only after that exits 0. Do not paste `code-reviewer`'s checklist into its
+brief: two reviewers reading one checklist look in the same places.
+
+- **Exit 15: the user switched Codex review OFF** (`CODEX_REVIEW=off`). Do not retry.
+  Run `code-reviewer` even if the user did not pick it, and write
+  `Codex review: off (CODEX_REVIEW=off)` in the report and the verdict comment.
+- **Any other non-zero exit: Codex did not run.** Say so in the report and the verdict
+  comment, with the reason the runner printed, and run `code-reviewer` in its place if
+  it is not running already. Retry at most once.
+
 **A round with no code reviewer at all is not a round.** `code-reviewer` is the one
 reviewer the round cannot proceed without. If it did not run, say so in the report and
 in the verdict comment, with the reason, and run it again once. A reviewer that never

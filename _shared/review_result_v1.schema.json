@@ -1,0 +1,46 @@
+{
+  "$comment": "review-result/1. Passed to `codex exec --output-schema` for a typed review. It GUIDES the model; delegation_contract.py is the authority and re-checks every field locally. Written in the strict subset (every property required, no additional properties) so the CLI's structured-output mode accepts it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "request", "status", "coverage", "findings"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["review-result/1"]},
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "repo_id", "base_sha", "head_sha"],
+      "properties": {
+        "request_id": {"type": "string"},
+        "repo_id": {"type": "string"},
+        "base_sha": {"type": "string"},
+        "head_sha": {"type": "string"}
+      }
+    },
+    "status": {"type": "string", "enum": ["complete", "incomplete", "failed"]},
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files_read", "checks_not_run"],
+      "properties": {
+        "files_read": {"type": "array", "items": {"type": "string"}},
+        "checks_not_run": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "file", "line", "title", "failure_scenario"],
+        "properties": {
+          "id": {"type": "string"},
+          "severity": {"type": "string", "enum": ["Critical", "Warning", "Suggestion"]},
+          "file": {"type": "string"},
+          "line": {"type": ["integer", "null"]},
+          "title": {"type": "string"},
+          "failure_scenario": {"type": "string"}
+        }
+      }
+    }
+  }
+}
