@@ -15,7 +15,7 @@ Why a wrapper rather than a raw `codex exec` line in each skill:
      the caller reports a review that never happened. The child writes to a
      temporary file inside its own run directory, and --out is written ONLY by an
      os.replace after every validation below has passed. So --out exists if and
-     only if this wrapper exited 0, which is the contract every caller reads.
+     only if this wrapper exited 0 (15, Codex switched off, leaves --out untouched), which is the contract every caller reads.
   4. The default sandbox is workspace-write with approvals off. A reviewer must
      not be able to edit the tree it is reviewing, so read-only is the default
      here and a caller has to ask for anything wider.
@@ -121,10 +121,10 @@ Exit codes, all distinct so a caller can say WHY it did not run:
  13  the request was refused before launch (a typed review whose commits or
      repository identity cannot be resolved); no model call was made
  15  Codex review is switched OFF (CODEX_REVIEW=off, 0, false or no, or any
-     word that is not also on, auto, 1, true or yes); nothing was started, and an
-     older --out moved into the run history. The caller reviews with Claude only
-     and says so. Unset, empty, on and auto try Codex, so a broken login still
-     fails loud with 2 or 3
+     word that is not also on, auto, 1, true or yes); nothing was started or
+     written and --out was not touched, so whatever is there is from an earlier
+     run. The caller reviews with Claude only and says so. Unset, empty, on and
+     auto try Codex, so a broken login still fails loud with 2 or 3
 130  interrupted by SIGINT; 143 interrupted by SIGTERM (nothing published)
 """
 
@@ -152,9 +152,11 @@ MODEL = os.environ.get("CODEX_REVIEW_MODEL", "").strip() or None
 # Sent on every call that names no effort, so a run never depends on the user's
 # Codex config (which --isolated ignores).
 EFFORT = "high"
-# Where the Codex CLI keeps its login: CODEX_HOME when set, else ~/.codex.
-CODEX_HOME = pathlib.Path(os.environ.get("CODEX_HOME") or
-                          (pathlib.Path.home() / ".codex")).expanduser()
+def codex_home():
+    """Where the Codex CLI keeps its login: CODEX_HOME when set, else ~/.codex.
+    Read on every call, because the Codex child reads it when it starts."""
+    return pathlib.Path(os.environ.get("CODEX_HOME") or
+                        (pathlib.Path.home() / ".codex")).expanduser()
 DEFAULT_TIMEOUT = 1800
 
 RUNS_DIRNAME = ".codex-runs"
@@ -215,43 +217,16 @@ def review_switch():
         return "on", f"{SWITCH_ENV}={value or 'unset'}"
     if value in SWITCH_OFF:
         return "off", f"{SWITCH_ENV}={value}"
-    return "off", (f"{SWITCH_ENV}={raw.strip()!r} is not on, off or auto, "
-                   "so it is read as off")
-
-
-def retire_for_off(out, repo, label):
-    """Under OFF, move an older answer and its receipt into the run history, as a
-    real run does first, so "--out exists only after this run succeeded" still
-    holds. Creates nothing when there is nothing to move, and leaves a path that
-    check_out_path refuses, or that another job holds the lock on, alone."""
-    out = pathlib.Path(out).expanduser()
-    receipt = pathlib.Path(contract.receipt_path(out))
-    if not any(p.exists() or p.is_symlink() for p in (out, receipt)):
-        return
-    if check_out_path(out, repo)[0]:
-        return
-    lock_fd = os.open(str(out.parent / (out.name + ".lock")),
-                      os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            return
-        rundir = out.parent / RUNS_DIRNAME / make_run_id(label + "-off")
-        rundir.mkdir(parents=True, exist_ok=True)
-        if out.exists() or out.is_symlink():
-            os.replace(str(out), str(rundir / "previous-result.md"))
-        if receipt.exists() or receipt.is_symlink():
-            os.replace(str(receipt), str(rundir / "previous-receipt.json"))
-    finally:
-        os.close(lock_fd)
+    return "off", (f"{SWITCH_ENV}={raw.strip()!r} is not a word it knows "
+                   "(on, auto, 1, true, yes / off, 0, false, no), so it is read as off")
 
 
 def switched_off(label, why):
     """The one line every caller sees under OFF. It must never read as a clean
     review: it says nothing ran and that the round is Claude-only."""
     return (f"CODEX {label}: SKIPPED, Codex review is off ({why}). Nothing was "
-            "started or written; review with Claude reviewers only, and say so.")
+            "started or written, and --out was not touched, so do not read it; "
+            "review with Claude reviewers only, and say so.")
 
 
 def preflight():
@@ -264,7 +239,7 @@ def preflight():
         return EXIT_NO_CLI, ("codex CLI not on PATH; install the Codex CLI ("
                              + OFF_HINT + ")")
 
-    auth = CODEX_HOME / "auth.json"
+    auth = codex_home() / "auth.json"
     if not auth.exists():
         return EXIT_NO_CRED, f"no Codex credential at {auth}; run `codex login` ({OFF_HINT})"
     try:
@@ -677,8 +652,11 @@ def run(prompt, repo, out, sandbox, timeout, model, label, isolated=False,
     state, why = review_switch()
     if state == "off":
         print(switched_off(label, why), file=sys.stderr)
-        retire_for_off(out, repo, label)
         return EXIT_SWITCHED_OFF
+    if repo is not None and not str(repo).strip():
+        print(f"CODEX {label}: REFUSED, --repo is empty (a failed $(mktemp -d)?); "
+              "nothing was started", file=sys.stderr)
+        return EXIT_REQUEST_REFUSED
 
     out = pathlib.Path(out).expanduser()
 
@@ -1212,8 +1190,6 @@ def main():
     state, why = review_switch()
     if state == "off":
         print(switched_off(a.label, why), file=sys.stderr)
-        if a.out:
-            retire_for_off(a.out, a.repo, a.label)
         return EXIT_SWITCHED_OFF
 
     if not a.out:

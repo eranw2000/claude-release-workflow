@@ -45,10 +45,10 @@ One setting, read by the runner: `CODEX_REVIEW`. Set it once in
 
 - **`off`** (also `0`, `false`, `no`): the runner starts nothing, prints one line
   starting `CODEX <label>: SKIPPED, Codex review is off`, and exits **15**. It
-  decides this before it reads the brief. An older answer at `--out` and its receipt
-  move into the run history, so `--out` still exists only after a run that
-  succeeded. `--check` prints `CODEX SWITCHED OFF` and exits 15 too. Any other word
-  is read as off, and the line names it.
+  decides this before it reads the brief, and it never touches `--out`: a file
+  there is from an earlier run, so read `--out` only after exit 0. `--check` prints
+  `CODEX SWITCHED OFF` and exits 15 too. Any other word is read as off, and the
+  line names it.
 - **Unset, empty, `on` or `auto`** (also `1`, `true`, `yes`): Codex is tried, as
   before. A missing CLI (exit 2) or a missing login (exit 3) still fails loud, and
   the message names this switch. So a broken Codex login is never quietly treated
@@ -125,7 +125,7 @@ A file at `$OUT` with no passing `verify` is not a result.
 
 ### What a run leaves behind
 
-`--out` keeps its meaning: the file exists ONLY after a validated success, and exit 0
+`--out` keeps its meaning: the file exists ONLY after a validated success (exit 15 leaves it untouched, so never read it then), and exit 0
 means it is there. Everything else about a run now lives beside it, in
 `<dirname(out)>/.codex-runs/<run_id>/`: the child's temporary answer, its stderr
 (kept, never printed), `manifest.json` on success (run id, label, model, CLI version,
