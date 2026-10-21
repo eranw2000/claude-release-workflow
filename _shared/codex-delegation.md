@@ -125,7 +125,7 @@ A file at `$OUT` with no passing `verify` is not a result.
 
 ### What a run leaves behind
 
-`--out` keeps its meaning: the file exists ONLY after a validated success (exit 15 leaves it untouched, so never read it then), and exit 0
+`--out` keeps its meaning: read it ONLY after exit 0, the one exit that means a validated success (an exit before launch, such as 13 or 15, leaves an older file untouched), and exit 0
 means it is there. Everything else about a run now lives beside it, in
 `<dirname(out)>/.codex-runs/<run_id>/`: the child's temporary answer, its stderr
 (kept, never printed), `manifest.json` on success (run id, label, model, CLI version,

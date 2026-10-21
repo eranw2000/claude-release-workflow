@@ -96,7 +96,7 @@ brief: two reviewers reading one checklist look in the same places.
 - **Exit 15: the user switched Codex review OFF** (`CODEX_REVIEW=off`). Do not retry.
   Run `code-reviewer` even if the user did not pick it, and write
   `Codex review: off (CODEX_REVIEW=off)` in the report and the verdict comment.
-  If the `code-reviewer` agent is not installed, the round has no code reviewer:
+  Do not read its `--out` or run `verify`. If the `code-reviewer` agent is not installed, the round has no code reviewer:
   say so and post no clean verdict.
 - **Any other non-zero exit: Codex did not run.** Say so in the report and the verdict
   comment, with the reason the runner printed, and run `code-reviewer` in its place if

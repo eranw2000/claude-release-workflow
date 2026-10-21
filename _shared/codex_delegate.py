@@ -15,7 +15,7 @@ Why a wrapper rather than a raw `codex exec` line in each skill:
      the caller reports a review that never happened. The child writes to a
      temporary file inside its own run directory, and --out is written ONLY by an
      os.replace after every validation below has passed. So --out exists if and
-     only if this wrapper exited 0 (15, Codex switched off, leaves --out untouched), which is the contract every caller reads.
+     only if this wrapper exited 0, except that an exit before launch (13 refused, 15 switched off) leaves an older --out untouched; so read --out only after exit 0, which is the contract every caller reads.
   4. The default sandbox is workspace-write with approvals off. A reviewer must
      not be able to edit the tree it is reviewing, so read-only is the default
      here and a caller has to ask for anything wider.

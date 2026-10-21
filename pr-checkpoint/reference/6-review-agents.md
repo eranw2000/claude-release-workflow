@@ -37,8 +37,8 @@ Launch them in a single message so they run in parallel (they are independent).
   follow it. If it cannot run, say so with the runner's exit reason and make sure
   `code-reviewer` runs. Exit 15 means the user set `CODEX_REVIEW=off`: no retry,
   `code-reviewer` runs whatever was picked, and the report says
-  `Codex review: off (CODEX_REVIEW=off)`. If the `code-reviewer` agent is not
-  installed, say the checkpoint had no code reviewer.
+  `Codex review: off (CODEX_REVIEW=off)`. Do not read its `--out`. If the
+  `code-reviewer` agent is not installed, say the checkpoint had no code reviewer.
 - **`code-reviewer`**: quality and maintainability on the branch diff against the base.
 - **`deploy-guard`**: secrets/PII, config and prod hygiene, deploy-target safety,
   and the stack-specific checks for whatever stack it detects.
