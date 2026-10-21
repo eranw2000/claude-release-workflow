@@ -83,8 +83,8 @@ another and its own docstring said so, and every test plus a 45-mutation run agr
 with the code. Only a reviewer pointed at the plan's decisions caught it.
 
 **Launch `codex-reviewer` in that same message, when Codex is set up.** It is a second
-model family (OpenAI, through the headless Codex CLI), so it does not share Claude's
-blind spots, and a finding both families report is the strongest signal a round makes.
+model family (OpenAI, through the headless Codex CLI) that reads the change on its
+own, and a finding both families report deserves the most attention.
 It is a Bash call, not an agent, so it runs alongside the agents. Read
 `~/.claude/skills/_shared/codex-delegation.md` and follow it: a TYPED review
 (`--job-type review`, a fresh request ID, `--base` and `--head` bound to the diff, the

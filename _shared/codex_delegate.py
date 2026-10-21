@@ -120,10 +120,11 @@ Exit codes, all distinct so a caller can say WHY it did not run:
      model
  13  the request was refused before launch (a typed review whose commits or
      repository identity cannot be resolved); no model call was made
- 15  Codex review is switched OFF (CODEX_REVIEW=off, or a value that is not
-     on, off or auto); nothing was started or written. The caller reviews with
-     Claude only and says so. Unset, on and auto try Codex, so a broken login
-     still fails loud with 2 or 3
+ 15  Codex review is switched OFF (CODEX_REVIEW=off, 0, false or no, or any
+     word that is not also on, auto, 1, true or yes); nothing was started, and an
+     older --out moved into the run history. The caller reviews with Claude only
+     and says so. Unset, empty, on and auto try Codex, so a broken login still
+     fails loud with 2 or 3
 130  interrupted by SIGINT; 143 interrupted by SIGTERM (nothing published)
 """
 
@@ -151,7 +152,9 @@ MODEL = os.environ.get("CODEX_REVIEW_MODEL", "").strip() or None
 # Sent on every call that names no effort, so a run never depends on the user's
 # Codex config (which --isolated ignores).
 EFFORT = "high"
-CODEX_HOME = pathlib.Path.home() / ".codex"
+# Where the Codex CLI keeps its login: CODEX_HOME when set, else ~/.codex.
+CODEX_HOME = pathlib.Path(os.environ.get("CODEX_HOME") or
+                          (pathlib.Path.home() / ".codex")).expanduser()
 DEFAULT_TIMEOUT = 1800
 
 RUNS_DIRNAME = ".codex-runs"
@@ -214,6 +217,34 @@ def review_switch():
         return "off", f"{SWITCH_ENV}={value}"
     return "off", (f"{SWITCH_ENV}={raw.strip()!r} is not on, off or auto, "
                    "so it is read as off")
+
+
+def retire_for_off(out, repo, label):
+    """Under OFF, move an older answer and its receipt into the run history, as a
+    real run does first, so "--out exists only after this run succeeded" still
+    holds. Creates nothing when there is nothing to move, and leaves a path that
+    check_out_path refuses, or that another job holds the lock on, alone."""
+    out = pathlib.Path(out).expanduser()
+    receipt = pathlib.Path(contract.receipt_path(out))
+    if not any(p.exists() or p.is_symlink() for p in (out, receipt)):
+        return
+    if check_out_path(out, repo)[0]:
+        return
+    lock_fd = os.open(str(out.parent / (out.name + ".lock")),
+                      os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return
+        rundir = out.parent / RUNS_DIRNAME / make_run_id(label + "-off")
+        rundir.mkdir(parents=True, exist_ok=True)
+        if out.exists() or out.is_symlink():
+            os.replace(str(out), str(rundir / "previous-result.md"))
+        if receipt.exists() or receipt.is_symlink():
+            os.replace(str(receipt), str(rundir / "previous-receipt.json"))
+    finally:
+        os.close(lock_fd)
 
 
 def switched_off(label, why):
@@ -646,6 +677,7 @@ def run(prompt, repo, out, sandbox, timeout, model, label, isolated=False,
     state, why = review_switch()
     if state == "off":
         print(switched_off(label, why), file=sys.stderr)
+        retire_for_off(out, repo, label)
         return EXIT_SWITCHED_OFF
 
     out = pathlib.Path(out).expanduser()
@@ -1174,6 +1206,15 @@ def main():
         code, detail = preflight()
         print(("CODEX AVAILABLE: " if code == 0 else "CODEX UNAVAILABLE: ") + detail)
         return code
+
+    # OFF is decided before the brief or any other input is read, so a user with
+    # no Codex account never sees an error about a file Codex would have used.
+    state, why = review_switch()
+    if state == "off":
+        print(switched_off(a.label, why), file=sys.stderr)
+        if a.out:
+            retire_for_off(a.out, a.repo, a.label)
+        return EXIT_SWITCHED_OFF
 
     if not a.out:
         ap.error("--out is required")

@@ -15,9 +15,9 @@ stays the driver and owns the verdict.
 
 Two reasons to hand a job out, and they are not the same reason:
 
-- **Independence.** A second model family does not share Claude's blind spots.
+- **Independence.** A model from a different family reads the change on its own.
   Reviewers that differ in prompt and checklist, but not in model, are the same
-  read several times. `codex-reviewer` adds a second family to every code review.
+  read several times. `codex-reviewer` runs a second family beside the Claude reviewers.
 - **Cost.** The work bills the OpenAI account Codex is logged in with, not the
   Claude one.
 
@@ -32,6 +32,10 @@ Two reasons to hand a job out, and they are not the same reason:
 
 Check availability first with `--check`, which makes no model call.
 
+**The command above is for drafts** (a plan, a threat model). It still gets a
+receipt. For a code review whose verdict anything relies on, use the typed review
+below, which checks the answer against the request.
+
 ### Turning Codex review OFF (for a user with no Codex account)
 
 One setting, read by the runner: `CODEX_REVIEW`. Set it once in
@@ -39,31 +43,31 @@ One setting, read by the runner: `CODEX_REVIEW`. Set it once in
 
     { "env": { "CODEX_REVIEW": "off" } }
 
-- **`off`**: the runner starts nothing, writes nothing, prints one line starting
-  `CODEX <label>: SKIPPED, Codex review is off`, and exits **15**. `--check` prints
-  `CODEX SWITCHED OFF` and exits 15 too. A value that is not `on`, `off` or `auto`
+- **`off`** (also `0`, `false`, `no`): the runner starts nothing, prints one line
+  starting `CODEX <label>: SKIPPED, Codex review is off`, and exits **15**. It
+  decides this before it reads the brief. An older answer at `--out` and its receipt
+  move into the run history, so `--out` still exists only after a run that
+  succeeded. `--check` prints `CODEX SWITCHED OFF` and exits 15 too. Any other word
   is read as off, and the line names it.
-- **Unset, `on` or `auto`**: Codex is tried, as before. A missing CLI (exit 2) or a
-  missing login (exit 3) still fails loud, and the message names this switch. So a
-  broken Codex login is never quietly treated as "off".
+- **Unset, empty, `on` or `auto`** (also `1`, `true`, `yes`): Codex is tried, as
+  before. A missing CLI (exit 2) or a missing login (exit 3) still fails loud, and
+  the message names this switch. So a broken Codex login is never quietly treated
+  as "off". The login is read from `CODEX_HOME` when it is set, else `~/.codex`.
 - **`CODEX_REVIEW_MODEL`** (optional) names the model for every call that passes no
   `--model` and no `--profile`.
 
 **Every caller handles exit 15 the same way.** The round goes on with Claude
 reviewers only, and:
 
-1. The Claude `code-reviewer` agent becomes MANDATORY for that round, even when the
-   user did not pick it. A round under OFF never ends with zero code reviewers.
+1. In `review-round` and `pr-checkpoint`, the Claude `code-reviewer` agent becomes
+   MANDATORY for that round, even when the user did not pick it. If that agent is
+   not installed, the round has no code reviewer: say so, and post no clean verdict.
+   The security skills run their analysis pass on Claude instead.
 2. The report and any verdict comment carry the line
    `Codex review: off (CODEX_REVIEW=off)`, so a reader can see one model family
    reviewed the diff.
 3. Exit 15 is never a finding count of zero and never a clean review. It means
    Codex did not look.
-
-**That command is a LEGACY call, and its answer is an uncertified draft.** It still
-works exactly as before, and it still gets a receipt, but nothing checks that the
-answer is about the work you asked for. Use it for drafts (a plan, a threat model).
-For a code review whose verdict anything relies on, use the typed review below.
 
 ### The typed review command
 
@@ -95,11 +99,9 @@ refused before launch (exit 13, `checkout-not-at-head`, `checkout-dirty` or
 object: an untracked file is readable by the model and belongs to no commit, so a
 review shaped by one is not a true review of `$HEAD_SHA`. When an untracked file
 genuinely has to be there, `--allow-untracked` lets the run through and writes the
-paths into the receipt's `untracked_waived`, with a `WAIVER` line on stderr. The data
-is there to read; nothing in the pipeline reads it, `verify` does not surface it, and
-it sits outside `request_sha256` so it can be removed afterwards without breaking
-`check_publication`. Treat it as a note to a human, not as an enforced control. An
-empty `untracked_waived` is the normal case.
+paths into the receipt's `untracked_waived`, with a `WAIVER` line on stderr, for a
+person to read. It sits outside `request_sha256`, so it can be removed afterwards
+without breaking `check_publication`. An empty `untracked_waived` is the normal case.
 
 A TRACKED symlink is checked, not just listed: git records only the link text, so a
 link whose target is not a tracked path inside the checkout refuses exactly like an
@@ -176,7 +178,6 @@ recall it.** An unsupported id comes back as a 400 that NAMES it (`The '<id>' mo
 not supported ...`), which is what makes a probe carrying a deliberately wrong id a
 real control rather than a formality.
 
-
 **Run it in the BACKGROUND, because the Bash tool's own ceiling is 10 minutes and
 this runner often needs more.** The `--timeout 1800` above is 30 minutes, so the
 documented command run in the foreground is killed by the tool at 10 with NOTHING
@@ -211,7 +212,7 @@ not started. If a caller ever needs the raw command, close stdin with `< /dev/nu
 **Read-only, always.** The sandbox default is `read-only` and a reviewer keeps
 it. Never delegate anything that writes files, pushes, deploys, rotates a
 credential, or rewrites git history. Those run under your machine's own guards,
-and Codex runs in its own sandbox where none of those guards exist.
+so they stay in Claude's hands.
 
 **Fail loud.** If the delegation did not run, say so in the report and in any
 verdict comment, naming the exit reason the runner printed. A reviewer that

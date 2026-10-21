@@ -125,7 +125,7 @@ python3 ~/.claude/skills/_shared/codex_delegate.py --check
 { "env": { "CODEX_REVIEW": "off" } }
 ```
 
-With `CODEX_REVIEW=off` the runner starts nothing and exits 15. The review still runs on Claude alone: the `code-reviewer` agent becomes mandatory for that round, and the verdict comment says `Codex review: off (CODEX_REVIEW=off)`. When the switch is unset and Codex is missing, the runner fails loud (exit 2 or 3) and names the switch, so a broken login is never mistaken for "off".
+With `CODEX_REVIEW=off` the runner starts nothing and exits 15. The review still runs on Claude alone: the `code-reviewer` agent becomes mandatory for that round, and the verdict comment says `Codex review: off (CODEX_REVIEW=off)`. Without the review agents installed (see Companions), such a round has no code reviewer, so it says so and posts no clean verdict. When the switch is unset and Codex is missing, the runner fails loud (exit 2 or 3) and names the switch, so a broken login is never mistaken for "off".
 
 The runner sends no model name unless you pick one, so Codex uses its own default. To choose, set `CODEX_REVIEW_MODEL` in the same `env` block, or add profiles to `_shared/model_profiles.json`.
 
