@@ -4,8 +4,13 @@ One PR comment (`gh pr comment`) containing:
   total, fixed or declined count anywhere in the comment, is COUNTED from the saved
   findings by a command, never typed from memory.** Say the same number in chat only
   after that. A long session drifts.
-- Any finding two reviewers both reported, called out as convergent. That pair is
-  the strongest signal the round produces.
+- `codex-reviewer`'s counts under the same three bands, named as `codex/<model>` with
+  the model read from its receipt, so a reader can see which family found what. If it
+  did not run, one line saying so and why, and which reviewer stood in, never silence.
+  When the user switched it off (exit 15) that line is exactly
+  `Codex review: off (CODEX_REVIEW=off)`.
+- Any finding two reviewers both reported, called out as convergent. A finding both
+  model families reported is the strongest signal the round produces.
 - Every Critical/Blocker with its status: **Fixed** (name the regression test),
   **Declined** (state the reason), or **Open**.
 - The reproduction command for each executed finding.

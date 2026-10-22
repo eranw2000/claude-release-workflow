@@ -1,0 +1,6 @@
+{
+  "$comment": "Optional. A profile turns 'use this model at this effort' into exact codex CLI arguments, used with --profile <name>. effort null = inherited from your Codex config. status: enabled, or pending-smoke (refused unless the call passes --smoke). requires_reason: the call must pass a non-empty --profile-reason. Replace <your-model> with a model your Codex account can use.",
+  "profiles": {
+    "example-high": {"model": "<your-model>", "effort": "high", "status": "enabled", "requires_reason": false}
+  }
+}

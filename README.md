@@ -33,6 +33,7 @@ Shared protocols the skills reference (in `_shared/`):
 - **`release-docs.md`**: how the README and project notes get updated at ship time, plus the secrets / staging guardrails.
 - **`local-docker-rebuild.md`**: detect and rebuild the repo's local container; skips silently when the project does not use Docker.
 - **`harness-files-protection.md`**: a preflight that keeps AI-assistant working files (`CLAUDE.md`, `MEMORY.md`, `.claude/`, and so on) out of any repo you do not own personally.
+- **`codex-delegation.md`** and **`codex_delegate.py`**: the `codex-reviewer`, a second model family (OpenAI, through the headless Codex CLI) that reviews the same diff as the Claude agents. The runner keeps Codex read-only, fails loud when it cannot run, and checks that the answer is about the commits it was asked to review. `delegation_contract.py`, `process_group.py`, `review_result_v1.schema.json` and `model_profiles.json` (an example) are its helpers. See "Codex review" below.
 
 The hooks (in `hooks/`):
 
@@ -49,7 +50,7 @@ for d in pr-checkpoint review-round release; do
   cp -R "$d" ~/.claude/skills/
 done
 mkdir -p ~/.claude/skills/_shared
-cp _shared/*.md _shared/security-scan.sh ~/.claude/skills/_shared/
+cp _shared/*.md _shared/*.py _shared/*.json _shared/security-scan.sh ~/.claude/skills/_shared/
 chmod +x ~/.claude/skills/_shared/security-scan.sh ~/.claude/skills/release/sync-remotes.sh
 
 # 2. Hooks -> ~/.claude/hooks/
@@ -109,6 +110,24 @@ The push guard needs `jq` on your PATH; the test-integrity hook needs `python3` 
 ### Configure your personal GitHub owners
 
 The harness-file preflight needs to know which remotes are "yours". Open `~/.claude/skills/_shared/harness-files-protection.md` and set the `PERSONAL_OWNERS` list to your own GitHub username(s) and org(s). Everything else is treated as a client / shared repo where assistant notes must not be pushed.
+
+## Codex review (optional, on by default when Codex is installed)
+
+`review-round` and `pr-checkpoint` launch `codex-reviewer` beside the Claude agents. It needs the [Codex CLI](https://github.com/openai/codex) on your `PATH` and a login (`codex login`). Check with:
+
+```bash
+python3 ~/.claude/skills/_shared/codex_delegate.py --check
+```
+
+**No Codex account? Turn it off once** in `~/.claude/settings.json`:
+
+```json
+{ "env": { "CODEX_REVIEW": "off" } }
+```
+
+With `CODEX_REVIEW=off` the runner starts nothing and exits 15. The review still runs on Claude alone: the `code-reviewer` agent becomes mandatory for that round, and the verdict comment says `Codex review: off (CODEX_REVIEW=off)`. Without the review agents installed (see Companions), such a round has no code reviewer, so it says so and posts no clean verdict. When the switch is unset and Codex is missing, the runner fails loud (exit 2 or 3) and names the switch, so a broken login is never mistaken for "off".
+
+The runner sends no model name unless you pick one, so Codex uses its own default. To choose, set `CODEX_REVIEW_MODEL` in the same `env` block, or add profiles to `_shared/model_profiles.json`.
 
 ## Companions (not bundled)
 
