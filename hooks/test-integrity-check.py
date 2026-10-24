@@ -348,8 +348,8 @@ def _corpus_claims(src, tree):
 
 
 # Check D2: test prose claims how ANOTHER test runs: a docstring saying "earlier
-# tests here (CourseTableTests) start real preload threads that deadlock" is false
-# when that class runs the preload INLINE on the test thread. Same rule as Check D, a
+# tests start real threads that deadlock" is false when those tests run inline on
+# the test thread. Same rule as Check D, a
 # runtime claim nobody ran, aimed at a different test. The ORDER is what keeps it quiet:
 # the other test is named FIRST and the runtime word follows, so "every read runs on a
 # thread (the half-done case is `XTests`)" is about this test and stays silent.
@@ -517,8 +517,7 @@ def _check_runtime_claims(tree, src):
         "patches (an inline stand-in runs on the calling thread), or run the module "
         "and watch. Then write the command into the sentence ('verified by "
         "running ...') or narrow it to what you checked "
-        "(measured on a real project: 'earlier tests start real "
-        "preload threads' was false, they run inline)."
+        "first."
     ]
 
 
@@ -622,7 +621,7 @@ def _check_absence_only(tree):
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
     shown = {_text_arg(c) for c in calls if _call_name(c.func) == "assertContains"}
     # assertIn('<text>', page) on the decoded page shows the text present too
-    # (assertIn('id="stillWorking"', page) then assertNotContains is not absence-only).
+    # (assertIn('id="busy"', page) then assertNotContains is not absence-only).
     shown |= {_needle_arg(c) for c in calls if _call_name(c.func) == "assertIn"}
     findings = []
     for fn in ast.walk(tree):
@@ -942,7 +941,7 @@ def run_hook():
                    "Edit/Write for test files.)" if via_bash else "")
             )
         elif via_bash and appended:
-            # A CLEAN append used to pass in silence, so the rule against it never ran.
+            # Warn on a clean append too.
             messages.append(APPEND_NOTE.format(path=path))
         if tool == "Edit":
             name = fixture_edit_function(path, tool_input.get("old_string") or "",
