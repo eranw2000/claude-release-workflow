@@ -33,6 +33,12 @@ cache in another process holds the old value". Before committing, list every pat
 the changed function can reach that consumer: each return, an exception from EVERY call the
 fix adds, and every write on each of those paths. Put the list in the fix commit message.
 
+**When a fix REMOVES or REPLACES a call (a normalizer, a conversion, a filter, a check), list
+every OTHER reader of what that call produced before committing.** Grep the function for each
+use of the value after the line you changed, and the callers for each use of its return value.
+Each reader the finding is not about keeps the input it had: give it its own copy (the old
+call, kept for it) rather than the new raw value.
+
 **When the picked findings cluster in ONE flow, write its rules before fixing any of them.**
 The tell is several findings in the same function or path, above all one that deletes, sends
 or pays (three or more is a cluster). Fixing them one by one patches each case and leaves the

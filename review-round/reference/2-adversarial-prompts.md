@@ -25,6 +25,10 @@ from?"** A bug fix's first failing test must use the original input that showed 
 and a new feature needs at least one test on a real sample. A fixture written in the same
 sitting as the code passes on exactly the cases its author already understood. Ask the
 reviewer to name each test whose input has no stated source.
+For a bug somebody REPORTED, the original input is their words AND what they saw: the page,
+the count, the message. Paste the report verbatim into the brief, never only a triage's
+restatement of it, and ask the reviewer which code path produces what they saw. Done when the
+fixed path is the one that gives their count.
 
 **Every prompt also asks: "What change is MISSING?"** For each
 new parameter, field or flag the diff adds or a test passes in, does every production
