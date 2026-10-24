@@ -1,3 +1,7 @@
+**First: a test that replaces one a finding called vacuous or untested, or that guards a
+bound, gets the four numbered steps under "So when a finding says something is untested"
+below, BEFORE it is written.** They sit far down this file, so a partial read misses them.
+
 Prove each new test by mutation (break the guard, confirm exactly that test fails,
 restore by re-applying the code, never `git checkout`) or by contrast (the same
 input with the gate un-armed produces the opposite outcome). A test with several
@@ -11,6 +15,11 @@ sees them.
 mutation of your fix.** Check it out (or paste its lines into the test's harness) and run the
 test there. A mutation that deletes your new guard keeps everything else your fix changed, and
 the original code differs in exactly those things: wording, structure, the order of writes.
+
+**When the fix re-implements a behaviour (a streaming or faster version, a port, a second copy), the
+test's oracle is the function it must agree with, never a sibling implementation.** A sibling written
+from the same reading shares the same mistake, so the two agree and the test cannot fail. Compare with
+the real function, over many generated inputs when the input space is wide.
 
 **A fix to a rule that READS TEXT (a regex, a word list, an intent or same-thing test) is not
 proven by the reviewer's one sentence.** That sentence is one member of a phrasing family, and a
@@ -45,7 +54,10 @@ the counter lived. **For a bound, the fixture must hold MORE items than the boun
 right rule and the wrong one agree by arithmetic.
 
 1. **List the candidate rules, as a list, in writing.** The rule under test plus every
-   wrong implementation a reader could reasonably expect. Four is common.
+   wrong implementation a reader could reasonably expect. Four is common. Two belong on
+   every list: **the input is ignored** (the save, POST or argument never reaches the
+   code), and **something already there passes the check** (a seed row, a default, a
+   neighbour that matches the filter).
 2. **Choose ONE fixture that answers differently under every one of them.** If you cannot,
    the fixture is wrong, not the assertion. This is the step that gets skipped.
 3. **Put that list in the test's own docstring**, with the answer each rule would give, so

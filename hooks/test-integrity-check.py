@@ -40,9 +40,17 @@ import sys
 
 try:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from _bash_write_targets import extract_write_targets
+    from _bash_write_targets import extract_write_targets, strip_heredocs
 except Exception:  # missing sibling module: Bash branch degrades to no-op
     extract_write_targets = None
+    strip_heredocs = None
+
+# A shell APPEND, read outside heredoc bodies. Appending is how tests get ADDED by shell.
+_APPEND_RE = re.compile(r">>|\btee\s+(?:-a\b|--append\b)")
+
+APPEND_NOTE = (
+    "TEST-INTEGRITY CHECK on {path}: tests were APPENDED with shell redirection. Add "
+    "tests with Edit/Write: this hook's Bash branch is the backstop, not the license.")
 
 UNPARSEABLE = "UNPARSEABLE"
 _SKIP_DIRS = {".venv", "venv", "node_modules", "site-packages", ".git"}
@@ -316,7 +324,59 @@ _FALSIFIER_RE = re.compile(
 
 
 def _corpus_claims(src, tree):
-    """Yield (lineno, sentence) for prose asserting a fixture is the real extreme.
+    """Yield (lineno, sentence) for prose asserting a fixture is the real extreme."""
+    seen = set()
+    for lineno, text in _prose_spans(src, tree):
+        if _FALSIFIER_RE.search(text):
+            continue
+        # Split the RAW span. Normalizing whitespace here first would work too, and
+        # that is the problem: with both in place the split pattern stops mattering,
+        # a mutation putting `\n` back into it survives, and the test named for the
+        # wrapped sentence passes either way. One defence, pinned by one test.
+        for sentence in _SENTENCE_SPLIT.split(text):
+            s = " ".join(sentence.split())
+            if not s:
+                continue
+            paired = _SUPERLATIVE_RE.search(s) and _REALITY_RE.search(s)
+            negative = _NO_REAL_RE.search(s) and (_EXTREME_RE.search(s)
+                                                  or _SUPERLATIVE_RE.search(s))
+            if paired or negative:
+                key = (lineno, s[:120])
+                if key not in seen:
+                    seen.add(key)
+                    yield key
+
+
+# Check D2: test prose claims how ANOTHER test runs: a docstring saying "earlier
+# tests start real threads that deadlock" is false when those tests run inline on
+# the test thread. Same rule as Check D, a
+# runtime claim nobody ran, aimed at a different test. The ORDER is what keeps it quiet:
+# the other test is named FIRST and the runtime word follows, so "every read runs on a
+# thread (the half-done case is `XTests`)" is about this test and stays silent.
+_RUNTIME_CLAIM_RE = re.compile(
+    r"(?:\b[A-Z][A-Za-z0-9]*Tests\b|(?i:\b(?:earlier|other|later|previous|preceding)"
+    r" tests?\b|\btests elsewhere\b))"
+    r".*?\b(?:hang|hangs|hung|hanging|deadlock\w*|threads?"
+    r"|runs? (?:first|before|after|last))\b")
+
+
+def _runtime_claims(src, tree):
+    """Yield (lineno, sentence) for prose saying how another test runs."""
+    seen = set()
+    for lineno, text in _prose_spans(src, tree):
+        if _FALSIFIER_RE.search(text):
+            continue
+        for sentence in _SENTENCE_SPLIT.split(text):
+            s = " ".join(sentence.split())
+            if s and _RUNTIME_CLAIM_RE.search(s):
+                key = (lineno, s[:160])
+                if key not in seen:
+                    seen.add(key)
+                    yield key
+
+
+def _prose_spans(src, tree):
+    """(lineno, text) for every docstring and every block of `#` comment lines.
 
     Docstrings come from the AST, so a string merely assigned to a variable is not
     mistaken for prose. Comments are read from the source, because a `#` line has no
@@ -349,27 +409,7 @@ def _corpus_claims(src, tree):
             block, start = [], None
     if block:
         spans.append((start, " ".join(block)))
-
-    seen = set()
-    for lineno, text in spans:
-        if _FALSIFIER_RE.search(text):
-            continue
-        # Split the RAW span. Normalizing whitespace here first would work too, and
-        # that is the problem: with both in place the split pattern stops mattering,
-        # a mutation putting `\n` back into it survives, and the test named for the
-        # wrapped sentence passes either way. One defence, pinned by one test.
-        for sentence in _SENTENCE_SPLIT.split(text):
-            s = " ".join(sentence.split())
-            if not s:
-                continue
-            paired = _SUPERLATIVE_RE.search(s) and _REALITY_RE.search(s)
-            negative = _NO_REAL_RE.search(s) and (_EXTREME_RE.search(s)
-                                                  or _SUPERLATIVE_RE.search(s))
-            if paired or negative:
-                key = (lineno, s[:120])
-                if key not in seen:
-                    seen.add(key)
-                    yield key
+    return spans
 
 
 def _expected_side_has_len(node):
@@ -463,6 +503,24 @@ def _check_corpus_claims(tree, src):
     ]
 
 
+def _check_runtime_claims(tree, src):
+    claims = list(_runtime_claims(src, tree))
+    if not claims:
+        return []
+    shown = "; ".join("line %d: %r" % (ln, s) for ln, s in claims[:3])
+    more = "" if len(claims) <= 3 else " (+%d more)" % (len(claims) - 3)
+    return [
+        "UNVERIFIED RUNTIME CLAIM about another test: " + shown + more
+        + ". This sentence says how ANOTHER test runs (its thread, a hang, a "
+        "deadlock, its order), and a docstring cannot fail. Run the command that "
+        "would falsify it before keeping it: read that test's set-up for what it "
+        "patches (an inline stand-in runs on the calling thread), or run the module "
+        "and watch. Then write the command into the sentence ('verified by "
+        "running ...') or narrow it to what you checked "
+        "first."
+    ]
+
+
 # Check E: a test that READS its input from one background job's scratch folder
 # (`~/.claude/jobs/<8 hex>/`). That folder is deleted with the job, so the test later
 # crashes or silently loses the case, and a crash takes every other case in the file
@@ -553,9 +611,18 @@ def _text_arg(call):
     return arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else None
 
 
+def _needle_arg(call):
+    """The literal text an assertIn(text, page) looks for, or None (a variable needle proves nothing)."""
+    arg = call.args[0] if call.args else None
+    return arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else None
+
+
 def _check_absence_only(tree):
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
     shown = {_text_arg(c) for c in calls if _call_name(c.func) == "assertContains"}
+    # assertIn('<text>', page) on the decoded page shows the text present too
+    # (assertIn('id="busy"', page) then assertNotContains is not absence-only).
+    shown |= {_needle_arg(c) for c in calls if _call_name(c.func) == "assertIn"}
     findings = []
     for fn in ast.walk(tree):
         if not (isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith("test")):
@@ -563,8 +630,11 @@ def _check_absence_only(tree):
         mine = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
         if _PRESENCE.intersection(_call_name(c.func) for c in mine):
             continue
+        # Shown when a sibling shows it present, alone or INSIDE a longer text: a page showing
+        # "skipped 2 files" also shows "skipped". One way only: the absent text inside a shown
+        # one, never a shown text inside the absent one.
         never = [t for t in (_text_arg(c) for c in mine if _call_name(c.func) in _ABSENCE_ONLY)
-                 if t is not None and t not in shown]
+                 if t is not None and not any(s and t in s for s in shown)]
         if never:
             findings.append(
                 "ABSENCE-ONLY at line %d: %s checks only that %r is NOT on the page, and no "
@@ -592,6 +662,7 @@ def analyze(path):
     findings = list(_check_real_path_defaults(path, tree))
     findings.extend(_check_scratch_reads(tree))
     findings.extend(_check_corpus_claims(tree, src))
+    findings.extend(_check_runtime_claims(tree, src))
     findings.extend(_check_corpus_scaled_expectations(tree))
     findings.extend(_check_absence_only(tree))
 
@@ -829,6 +900,7 @@ def run_hook():
         return
 
     via_bash = False
+    appended = False
     if tool in ("Write", "Edit", "MultiEdit"):
         paths = [tool_input.get("file_path") or ""]
     elif tool == "Bash":
@@ -838,6 +910,8 @@ def run_hook():
             return
         paths = extract_write_targets(command, data.get("cwd"))
         via_bash = True
+        appended = bool(_APPEND_RE.search(
+            strip_heredocs(command)[0] if strip_heredocs else command))
     else:
         return
 
@@ -866,6 +940,9 @@ def run_hook():
                 + (" (This file was written via shell redirection; prefer "
                    "Edit/Write for test files.)" if via_bash else "")
             )
+        elif via_bash and appended:
+            # Warn on a clean append too.
+            messages.append(APPEND_NOTE.format(path=path))
         if tool == "Edit":
             name = fixture_edit_function(path, tool_input.get("old_string") or "",
                                          tool_input.get("new_string") or "")
