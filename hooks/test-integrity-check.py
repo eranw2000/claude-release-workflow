@@ -645,6 +645,51 @@ def _check_absence_only(tree):
     return findings
 
 
+# The page-text variable names an ordering check reads, and what a bare name looks like.
+# Few ordering assertions over a page string use a bare-name needle, so the
+# check is quiet.
+_PAGE_VARS = frozenset({"body", "html", "text", "page", "content", "markup", "rendered"})
+_BARE_NAME = re.compile(r"^[A-Za-z_][\w-]*$")
+_ORDERING = frozenset({"assertLess", "assertGreater", "assertLessEqual", "assertGreaterEqual"})
+
+
+def _page_index_needles(node):
+    """Literal needles of `<page>.index('...')` calls inside one assertion argument."""
+    out = []
+    for sub in ast.walk(node):
+        if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr in ("index", "find") and sub.args
+                and isinstance(sub.args[0], ast.Constant) and isinstance(sub.args[0].value, str)):
+            continue
+        owner = sub.func.value
+        on_page = (isinstance(owner, ast.Name) and owner.id in _PAGE_VARS) or (
+            isinstance(owner, ast.Call) and _call_name(owner.func) == "decode")
+        if on_page:
+            out.append(sub.args[0].value)
+    return out
+
+
+def _check_bare_name_order(tree):
+    """An ORDER asserted on a page by finding a bare name.
+
+    A bare name can sit in a style rule, a script or an attribute anywhere above
+    the element, so the order measured may be the stylesheet's; a needle with
+    markup syntax (`<h2 class="title`) cannot.
+    """
+    findings = []
+    for call in ast.walk(tree):
+        if not (isinstance(call, ast.Call) and _call_name(call.func) in _ORDERING):
+            continue
+        bare = [n for a in call.args for n in _page_index_needles(a) if _BARE_NAME.match(n)]
+        if bare:
+            findings.append(
+                "BARE-NAME ORDER at line %d: this orders the page by finding %r, a bare name "
+                "that a <style> rule, a script or an attribute higher up the page can also "
+                "hold, so the order measured may be the stylesheet's, not the element's. "
+                "Search for markup instead, such as '<h2 class=\"%s'." % (call.lineno, bare[0], bare[0]))
+    return findings
+
+
 def analyze(path):
     """Return (status, findings) for one on-disk test file."""
     try:
@@ -665,6 +710,7 @@ def analyze(path):
     findings.extend(_check_runtime_claims(tree, src))
     findings.extend(_check_corpus_scaled_expectations(tree))
     findings.extend(_check_absence_only(tree))
+    findings.extend(_check_bare_name_order(tree))
 
     guard_idx = None
     guard = None
@@ -785,6 +831,18 @@ def fixture_edit_function(path, old, new):
     if outer.name.startswith("test_") or outer.name == "main":
         return None
     return outer.name
+
+
+def _once_scope(payload):
+    """The key a "once per session" warning is remembered under: the session, plus the agent
+    when a subagent is the caller. A subagent's hooks carry the parent's session_id with
+    `agent_id` set (Claude Code hooks docs).
+    So the key adds the agent, and a helper's warning is kept apart from the main
+    thread's.
+    """
+    session = str(payload.get("session_id") or "")
+    agent = payload.get("agent_id")
+    return session + "@" + str(agent) if session and agent else session
 
 
 def _first_fixture_note(session_id, path):
@@ -918,7 +976,7 @@ def run_hook():
     messages = []
     for path in paths:
         if path and os.path.isfile(path):
-            note = verdict_note(path, data.get("session_id"))
+            note = verdict_note(path, _once_scope(data))
             if note:
                 messages.append(note)
         if not path or not eligible(path) or not os.path.isfile(path):
@@ -946,7 +1004,7 @@ def run_hook():
         if tool == "Edit":
             name = fixture_edit_function(path, tool_input.get("old_string") or "",
                                          tool_input.get("new_string") or "")
-            if name and _first_fixture_note(data.get("session_id"), path):
+            if name and _first_fixture_note(_once_scope(data), path):
                 messages.append(FIXTURE_NOTE.format(path=path, name=name))
     if messages:
         _emit(messages)
