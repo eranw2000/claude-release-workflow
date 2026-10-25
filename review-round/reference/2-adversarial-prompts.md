@@ -33,7 +33,9 @@ fixed path is the one that gives their count.
 **Every prompt also asks: "What change is MISSING?"** For each
 new parameter, field or flag the diff adds or a test passes in, does every production
 caller actually send it? For each prompt, handler, schema or renderer the diff edits, how
-many siblings does it have, and how many changed? A diff cannot show a change that is not
+many siblings does it have, and how many changed? For each value whose meaning the diff
+changes (a limit, deadline, threshold or unit computed a new way), how many of its readers
+outside the edited function use the new meaning? A diff cannot show a change that is not
 in it, so ask the reviewer to search outside the diff and report "changed N of M".
 
 **Never ask a reviewer to walk a list. Ask it to sample the SITUATIONS.** Write the ask as
