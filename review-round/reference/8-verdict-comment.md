@@ -12,7 +12,9 @@ One PR comment (`gh pr comment`) containing:
 - Any finding two reviewers both reported, called out as convergent. A finding both
   model families reported is the strongest signal the round produces.
 - Every Critical/Blocker with its status: **Fixed** (name the regression test),
-  **Declined** (state the reason), or **Open**.
+  **Declined** (state the reason), **Deferred** (a `RARE` finding outside the protected
+  class that leaves the goal holding, step 3a: give its `TODO.md` id and its likelihood
+  line), or **Open**. List the Deferred ones together under a `Deferred` heading.
 - The reproduction command for each executed finding.
 - **A `Security scan:` line, on the head you are certifying**, from the same scan
   `/release` runs at A3b:
@@ -25,8 +27,8 @@ One PR comment (`gh pr comment`) containing:
   - `Review-round verdict: CHECKPOINT-ADVISORY @ <reviewed-HEAD-sha>`
 
 **Which value, and this is the part that is easy to get wrong.** `CLEAN` means a
-COMPLETED round: every Critical and Blocker was driven to Fixed or Declined, and
-the full suite was re-run green. It is a certification, and `/release` treats it
+COMPLETED round: every Critical and Blocker was driven to Fixed, Declined or
+Deferred, and the full suite was re-run green. It is a certification, and `/release` treats it
 as one.
 
 **CLEAN also means `/release`'s security scan gate will pass at this head.** Run it on

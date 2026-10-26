@@ -159,8 +159,7 @@ write belongs here, in whoever spawned them.
 
 - Never merge, deploy, or push to the base branch from this skill; the ship verb is
   `/release`.
-- Never post a CLEAN verdict while any Critical/Blocker is unresolved and
-  undeclined.
+- Never post CLEAN while a Critical/Blocker is not Fixed, Declined or Deferred.
 - Never post CLEAN while the release security scan has an unfixed, unwaived `[NEW]`
   finding at the reviewed head (step 8).
 - Never bind a verdict to a SHA you did not actually review and test.
