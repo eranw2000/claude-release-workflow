@@ -690,6 +690,67 @@ def _check_bare_name_order(tree):
     return findings
 
 
+# A test NAME that claims what the page shows, and the reads that would show it.
+# It fires only when every assertion reads the request and none reads the page.
+_RENDER_NAME = re.compile(r"(drawn|draws|rendered|renders|render_|shown|shows|displayed|appears)")
+_PAGE_ATTRS = frozenset({"content", "context", "text", "json", "rendered_content"})
+_PAGE_CALLS = frozenset({"assertContains", "assertNotContains", "assertTemplateUsed",
+                         "assertInHTML", "assertRedirects", "assertTemplateNotUsed"})
+
+
+def _reads_request(node):
+    """`response.wsgi_request.X` or `request.X`: a fact about the request, not the page."""
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Attribute):
+            continue
+        chain, n = [], sub
+        while isinstance(n, ast.Attribute):
+            chain.append(n.attr)
+            n = n.value
+        if "wsgi_request" in chain or (isinstance(n, ast.Name) and n.id == "request"):
+            return True
+    return False
+
+
+def _reads_page(fn):
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.Attribute) and sub.attr in _PAGE_ATTRS:
+            return True
+        if isinstance(sub, ast.Call):
+            name = _call_name(sub.func) or ""
+            if name in _PAGE_CALLS or "render" in name:
+                return True
+    return False
+
+
+def _check_render_name_request_only(tree):
+    """A test whose name says what the page shows, asserting only the request.
+
+    A test named "is drawn in <language>" that asserts only a locale attribute of
+    the request stays green when the translation is never activated, because
+    that attribute is set on its own line.
+    A request attribute is set apart from what draws the page, so it cannot see the page.
+    """
+    findings = []
+    for fn in ast.walk(tree):
+        if not (isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and fn.name.startswith("test") and _RENDER_NAME.search(fn.name)):
+            continue
+        asserts = [c for c in ast.walk(fn) if isinstance(c, ast.Call)
+                   and (_call_name(c.func) or "").startswith("assert")]
+        if not asserts or _reads_page(fn):
+            continue
+        if any(_reads_request(c) for c in asserts):
+            findings.append(
+                "RENDER-NAME, REQUEST-ONLY at line %d: %s says what the page shows, but its "
+                "assertions read only the request (wsgi_request / request attributes), never "
+                "the page. A request attribute is set apart from what draws the page, so a "
+                "page drawn wrong passes. Assert on the rendered page (response.content, "
+                "assertContains, the context), or record what is active at render time."
+                % (fn.lineno, fn.name))
+    return findings
+
+
 def analyze(path):
     """Return (status, findings) for one on-disk test file."""
     try:
@@ -711,6 +772,7 @@ def analyze(path):
     findings.extend(_check_corpus_scaled_expectations(tree))
     findings.extend(_check_absence_only(tree))
     findings.extend(_check_bare_name_order(tree))
+    findings.extend(_check_render_name_request_only(tree))
 
     guard_idx = None
     guard = None

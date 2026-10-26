@@ -13,6 +13,24 @@ Give them, in this order:
 2. **What each finding TOUCHES**: product code, or test and harness code. Reviewers
    grade by defect severity and cannot see who is waiting. A Critical in a checking
    script and a Critical in a shipped rule are not the same thing to the user.
+2b. **How likely each finding is in real use, and whether it blocks the goal.** Reviewers
+   grade how bad a case would be, never how often it happens. Read each finding's real-use
+   line (step 2 asks every reviewer to open its failure scenario with one) and give it ONE tag:
+   - `NORMAL`: happens in ordinary use of this feature.
+   - `PLAUSIBLE`: evidence says a real user, input or deployment reaches it: real data near
+     it, a code path that produces it, a report, or a documented use. That the system ALLOWS
+     the input is not evidence, or nothing would ever be rare.
+   - `RARE`: needs an unusual input, timing or setup that nobody has met.
+
+   `RARE` needs your own check, never a reviewer's silence: search the committed code, the
+   project's real data and its docs for a path or a use that reaches the case, and name
+   where you looked. Found none: `RARE`. A finding with no real-use line is a reason to
+   look, not a reason to call it rare. Say next to each finding whether the goal of this
+   work still holds with it open. For a `RARE` finding that does not block the goal and is
+   outside the protected class, recommend DEFER: one line in the project `TODO.md` with its
+   evidence, and no fix round. **The protected class is never deferred, however rare**: data
+   loss, security or privacy, money, production or live services, credentials, killing or
+   signalling processes, and a silently wrong result a user could act on.
 3. **Whether the POLICY each finding cites actually HOLDS in this repository.** A
    finding fails in two independent ways: the INSTANCE ("this file contains X") and
    the POLICY ("X is forbidden here"). Step 4 below reproduces the instance, and

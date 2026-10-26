@@ -38,6 +38,27 @@ changes (a limit, deadline, threshold or unit computed a new way), how many of i
 outside the edited function use the new meaning? A diff cannot show a change that is not
 in it, so ask the reviewer to search outside the diff and report "changed N of M".
 
+**Every prompt carries the GOAL and asks for the real-use trigger.**
+Paste the goal of this work and its definition of done into each prompt, and ask the
+reviewer to open every failure scenario with how the case happens in real use: who does
+what, with which input, in which setup. Where it cannot name one, it writes "no real-use
+trigger found" and still reports the finding. Step 3a tags each finding from that line plus
+its own search; a missing line is a reason to look, never proof that the case is rare. Do
+not ask reviewers to leave rare cases out: a
+rare security or data-loss case still blocks, and step 3a is where that is decided.
+
+**A prompt for the review of a FIX commit covers that commit, not the whole branch again.**
+Its scope is `git diff <the head the full round reviewed>..<the fix head>`, in place of step
+1's branch diff, and the verdict binds to the fix head. It leaves the PLAN CHECK block out
+(step 2a), because the full round already checked the plan
+and a fix diff delivers only its fix. It asks two questions: did the fix close the finding at every site of its kind (the path
+list step 5a puts in the fix commit message), and did it break something that worked. A new
+finding in the fix's own lines is reported with its real-use line like any other, and step
+3a recommends deferring it when it is `RARE`, the goal still holds, and it is outside the
+protected class.
+A fix that missed a sibling path did NOT close its
+finding, so that is never a rare new case.
+
 **Never ask a reviewer to walk a list. Ask it to sample the SITUATIONS.** Write the ask as
 a grouping instruction rather than a count: "group the guard-shaped lines by the situation
 each represents, check one of each, and report the groups plus how many instances you did

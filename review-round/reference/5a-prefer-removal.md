@@ -39,6 +39,14 @@ use of the value after the line you changed, and the callers for each use of its
 Each reader the finding is not about keeps the input it had: give it its own copy (the old
 call, kept for it) rather than the new raw value.
 
+**When a fix would REPLACE A LIBRARY with your own code** (an HTTP client, a parser, a date or
+encoding routine), keep the library and put the new check around it. A library carries
+behaviour nobody listed (cookies across redirects, charset parsing, host normalisation,
+bounded decompression), and a rewrite drops every item on that unwritten list at once. Done
+when the library still does the work and the fix adds only the check. Where the finding
+genuinely cannot be closed around the library, name each behaviour of the old call that your
+code must keep, and test against the library itself as the oracle (step 6).
+
 **When the picked findings cluster in ONE flow, write its rules before fixing any of them.**
 The tell is several findings in the same function or path, above all one that deletes, sends
 or pays (three or more is a cluster). Fixing them one by one patches each case and leaves the

@@ -14,8 +14,9 @@ CANDIDATE_SHA=$HEAD_SHA    # this iteration's candidate pin: what A3b scans and 
   like NO comment (a stale CLEAN must not certify commits pushed after the review,
   and a stale CRITICALS-OPEN must not block a fixed head).
 - `Review-round verdict: CLEAN @ <current-head-sha>`: the ONLY value that
-  certifies. It means a completed round, every Critical and Blocker resolved or
-  declined, full suite green.
+  certifies. It means a completed round, every Critical and Blocker fixed,
+  declined, or deferred as rare (review-round step 8, listed with a `TODO.md` id),
+  full suite green.
 - `Review-round verdict: CRITICALS-OPEN @ <current-head-sha>`: treat like
   COMMENTS.md Blockers. Stop, list the open Criticals from that comment, and offer
   to re-run `/review-round` or proceed only on an explicit override.
