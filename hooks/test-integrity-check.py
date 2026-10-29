@@ -111,6 +111,7 @@ _DESTRUCTIVE = {
     "rmtree", "remove", "unlink", "rmdir", "removedirs", "truncate", "replace",
 }
 _WRITE_MODES = ("w", "a", "x")
+_AMBIGUOUS_METHODS = {"replace", "remove"}
 
 
 def _real_path_expr(node, consts, depth=0):
@@ -136,40 +137,128 @@ def _real_path_expr(node, consts, depth=0):
     return False
 
 
-def _is_destructive_fn(fn):
-    """True if the function body deletes, or opens something for writing."""
-    for n in ast.walk(fn):
-        if not isinstance(n, ast.Call):
-            continue
-        name = n.func.attr if isinstance(n.func, ast.Attribute) else (
-            n.func.id if isinstance(n.func, ast.Name) else "")
-        if name in _DESTRUCTIVE:
+def _is_write_call(n):
+    """True if this call deletes, or opens something for writing. `replace` and
+    `remove` count only as os./shutil. calls or imported bare names: as a method they
+    are far more often str.replace or list.remove.
+
+    """
+    name = n.func.attr if isinstance(n.func, ast.Attribute) else (
+        n.func.id if isinstance(n.func, ast.Name) else "")
+    if name in _AMBIGUOUS_METHODS and isinstance(n.func, ast.Attribute):
+        base = n.func.value
+        if not (isinstance(base, ast.Name) and base.id in ("os", "shutil")):
+            return False
+    if name in _DESTRUCTIVE:
+        return True
+    if name == "open":
+        mode = None
+        if len(n.args) > 1 and isinstance(n.args[1], ast.Constant):
+            mode = n.args[1].value
+        for kw in n.keywords:
+            if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                mode = kw.value.value
+        if isinstance(mode, str) and mode[:1] in _WRITE_MODES:
             return True
-        if name == "open":
-            mode = None
-            if len(n.args) > 1 and isinstance(n.args[1], ast.Constant):
-                mode = n.args[1].value
-            for kw in n.keywords:
-                if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
-                    mode = kw.value.value
-            if isinstance(mode, str) and mode[:1] in _WRITE_MODES:
-                return True
     return False
 
 
+def _names(node):
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
+def _spread(taint, targets, src):
+    """Give every name bound by `targets` the parameters `src` depends on."""
+    came = set()
+    for nm in _names(src):
+        came |= taint.get(nm, set())
+    changed = False
+    for t in targets:
+        for nm in _names(t):
+            if not came <= taint.setdefault(nm, set()):
+                taint[nm] |= came
+                changed = True
+    return changed
+
+
+def _write_params(fn, fns, memo, stack=()):
+    """The parameters of `fn` whose VALUE reaches a write: a delete or a write-mode open
+    in `fn` itself, through any name built from the parameter (assignment, `+=`, an
+    annotated assignment, a for loop, a with target, an attribute set on an object), or
+    through a same-module function it is passed to. A read-only parameter is not
+    flagged, however much else the function writes.
+
+    """
+    if fn.name in memo:
+        return memo[fn.name]
+    if fn.name in stack:
+        return set()
+    params = [a.arg for a in fn.args.args + fn.args.kwonlyargs]
+    taint = {p: {p} for p in params}
+    changed = True
+    while changed:
+        changed = False
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Assign):
+                changed |= _spread(taint, n.targets, n.value)
+            elif isinstance(n, (ast.AugAssign, ast.AnnAssign)) and n.value is not None:
+                changed |= _spread(taint, [n.target], n.value)
+            elif isinstance(n, (ast.For, ast.AsyncFor)):
+                changed |= _spread(taint, [n.target], n.iter)
+            elif isinstance(n, (ast.With, ast.AsyncWith)):
+                for item in n.items:
+                    if item.optional_vars is not None:
+                        changed |= _spread(taint, [item.optional_vars], item.context_expr)
+    reached = set()
+    for n in ast.walk(fn):
+        if not isinstance(n, ast.Call):
+            continue
+
+        def deps(expr):
+            out = set()
+            for nm in _names(expr):
+                out |= taint.get(nm, set())
+            return out
+
+        involved = set()
+        for x in list(n.args) + [k.value for k in n.keywords]:
+            involved |= deps(x)
+        if isinstance(n.func, ast.Attribute):
+            involved |= deps(n.func.value)  # target.unlink(), fh.truncate()
+        if not involved:
+            continue
+        if _is_write_call(n):
+            reached |= involved
+            continue
+        callee = fns.get(n.func.id) if isinstance(n.func, ast.Name) else None
+        if callee is None:
+            continue
+        inner = _write_params(callee, fns, memo, stack + (fn.name,))
+        cparams = [a.arg for a in callee.args.args]
+        for i, x in enumerate(n.args):
+            if i < len(cparams) and cparams[i] in inner:
+                reached |= deps(x)
+        for k in n.keywords:
+            if k.arg in inner:
+                reached |= deps(k.value)
+    memo[fn.name] = reached
+    return reached
+
+
 def _risky_params(mod_tree):
-    """{func_name: [(index, param_name)]} for destructive functions whose
-    parameter DEFAULT points at a real path."""
+    """{func_name: [(index, param_name)]} for parameters whose DEFAULT points at a
+    real path and whose value reaches a write (_write_params)."""
     consts = {}
     for node in mod_tree.body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 \
                 and isinstance(node.targets[0], ast.Name):
             consts[node.targets[0].id] = node.value
+    fns = {n.name: n for n in mod_tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    memo = {}
     out = {}
-    for node in mod_tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if not _is_destructive_fn(node):
+    for node in fns.values():
+        written = _write_params(node, fns, memo)
+        if not written:
             continue
         params = [a.arg for a in node.args.args]
         defaults = node.args.defaults
@@ -177,10 +266,10 @@ def _risky_params(mod_tree):
         # defaults align to the TAIL of the positional parameter list
         offset = len(params) - len(defaults)
         for i, d in enumerate(defaults):
-            if _real_path_expr(d, consts):
+            if _real_path_expr(d, consts) and params[offset + i] in written:
                 risky.append((offset + i, params[offset + i]))
         for a, d in zip(node.args.kwonlyargs, node.args.kw_defaults):
-            if _real_path_expr(d, consts):
+            if _real_path_expr(d, consts) and a.arg in written:
                 risky.append((None, a.arg))
         if risky:
             out[node.name] = risky
