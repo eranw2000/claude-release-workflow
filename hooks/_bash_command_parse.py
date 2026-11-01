@@ -229,10 +229,16 @@ def strip_prefixes(tokens):
     return out
 
 
+def program_name(token):
+    """A program's plain name on any OS: C:\\Git\\cmd\\git.exe and git are both git."""
+    name = os.path.basename(token.replace("\\", "/"))
+    return name[:-4].lower() if name.lower().endswith(".exe") else name
+
+
 def nested_shell_command(tokens):
     """For `bash -c "<text>"` (also `-lc`, `-ec`, behind a wrapper), the text."""
     tokens = strip_prefixes(tokens)
-    if not tokens or os.path.basename(tokens[0]) not in SHELLS:
+    if not tokens or program_name(tokens[0]) not in SHELLS:
         return None
     saw_c = False
     i = 1
@@ -265,7 +271,7 @@ def git_call(tokens):
     when this segment does not run git.
     """
     tokens = strip_prefixes(tokens)
-    if not tokens or os.path.basename(tokens[0]) != "git":
+    if not tokens or program_name(tokens[0]) != "git":
         return None
 
     dash_c = None

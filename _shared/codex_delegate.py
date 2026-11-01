@@ -131,9 +131,10 @@ Exit codes, all distinct so a caller can say WHY it did not run:
 import argparse
 import sys
 # Read and write UTF-8 on every OS: the Windows default code page misreads it.
-for _stream in (sys.stdin, sys.stdout, sys.stderr):
-    if hasattr(_stream, "reconfigure"):
-        _stream.reconfigure(encoding="utf-8", errors="replace")
+if __name__ == "__main__":
+    for _stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
 import binascii
 import datetime
 import hashlib
@@ -239,6 +240,12 @@ def preflight():
     Reports WHERE it looked on failure, never a bare 'unavailable'.
     """
     exe = shutil.which("codex")
+    if exe and os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+        # Microsoft, CreateProcess: to run a batch file "you must start the command
+        # interpreter", and "The MSRC engineering team advises against this". The prompt
+        # is an argument here, so it would pass through cmd.exe. Stop and say so.
+        return EXIT_NO_CLI, ("codex is a %s script here, which cannot take a review prompt safely. "
+                             "Install a codex.exe, or %s" % (os.path.splitext(exe)[1], OFF_HINT))
     if not exe:
         return EXIT_NO_CLI, ("codex CLI not on PATH; install the Codex CLI ("
                              + OFF_HINT + ")")

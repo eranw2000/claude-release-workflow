@@ -60,15 +60,20 @@ def _win_process_info(pid):
     kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
     kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
     process_query_limited_information = 0x1000
-    error_access_denied = 5
-    still_active = 259
-    handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
+    synchronize = 0x00100000
+    error_invalid_parameter = 87
+    wait_object_0 = 0
+    kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    handle = kernel32.OpenProcess(process_query_limited_information | synchronize, False, int(pid))
     if not handle:
-        # Access denied means the process exists and belongs to someone else.
-        return ctypes.get_last_error() == error_access_denied, None
+        # Only this answer means gone (measured on Windows; Microsoft's OpenProcess page
+        # does not name one). Access denied, or anything else, must not read as gone.
+        return ctypes.get_last_error() != error_invalid_parameter, None
     try:
-        code = wintypes.DWORD()
-        alive = bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == still_active
+        # A process object is signalled when the process ends, which an exit code cannot
+        # say: Microsoft's GetExitCodeProcess page warns a process may exit with 259.
+        alive = kernel32.WaitForSingleObject(handle, 0) != wait_object_0
         times = [wintypes.FILETIME() for _ in range(4)]
         ok = kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in times])
         start = "%d:%d" % (times[0].dwHighDateTime, times[0].dwLowDateTime) if ok else None
@@ -234,13 +239,14 @@ def _win_stop(pid, grace, leader, kill_wait, result):
     if not group_present(pid):
         result.update(outcome="stopped", reason="group already empty")
         return result
-    polite = subprocess.run(["taskkill", "/PID", str(pid), "/T"], capture_output=True)
-    result["term_sent"] = True
-    # A console program with no window refuses the polite form, so do not wait on it.
-    if polite.returncode == 0 and _wait_empty(pid, grace, leader):
-        result.update(outcome="stopped", reason="left after TERM")
+    # Only the forced form. The polite one sends a window message, so a console program
+    # never receives it, and it can end the leader while a child stays.
+    try:
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                       timeout=max(kill_wait, 5))
+    except (OSError, subprocess.SubprocessError) as exc:
+        result.update(outcome="members-remain", reason=f"taskkill could not run ({exc.__class__.__name__})")
         return result
-    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
     result["kill_sent"] = True
     if _wait_empty(pid, kill_wait, leader):
         result.update(outcome="stopped", reason="left after KILL")
