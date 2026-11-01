@@ -48,6 +48,11 @@ diff actually lives in.
 """
 
 import argparse
+import sys
+# Read and write UTF-8 on every OS: the Windows default code page misreads it.
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 import hashlib
 import json
 import os
@@ -150,7 +155,7 @@ def made_by_this_setup(path, token):
     if not token:
         raise RuntimeError("the state file carries no token; not a copy this setup made")
     mark = admin_dir(path) / TOKEN_FILE
-    if not mark.is_file() or not hmac.compare_digest(mark.read_text(), token):
+    if not mark.is_file() or not hmac.compare_digest(mark.read_text(encoding="utf-8"), token):
         raise RuntimeError(f"{path} does not carry this setup's token; not a copy it made")
     return True
 
@@ -160,7 +165,7 @@ def make_copy(repo, dest, rev, agent, state, save):
     files, then the same for every checked-out submodule inside it."""
     repo = pathlib.Path(repo)
     git(repo, "worktree", "add", "--detach", str(dest), rev)
-    (admin_dir(dest) / TOKEN_FILE).write_text(state["token"])
+    (admin_dir(dest) / TOKEN_FILE).write_bytes((state["token"]).encode("utf-8"))
     state["copies"].append({"agent": agent, "repo": str(repo), "path": str(dest)})
     save()
     patch = git(repo, "diff", "HEAD", "--binary", "--ignore-submodules=all")
@@ -245,7 +250,7 @@ def setup(args):
              "agents": agents, "token": secrets.token_hex(16)}
 
     def save():
-        state_path.write_text(json.dumps(state, indent=2))
+        state_path.write_bytes((json.dumps(state, indent=2)).encode("utf-8"))
 
     save()
     try:
@@ -294,7 +299,7 @@ def detached_worktrees(repo):
 def check(args):
     state_path = pathlib.Path(args.state).resolve()
     base = state_path.parent
-    state = json.loads(state_path.read_text())
+    state = json.loads(state_path.read_text(encoding="utf-8"))
     repo = state["repo"]
     before, after = state["snapshot"], snapshot(repo)
     changed = sorted(p for p in set(before) | set(after) if before.get(p) != after.get(p))

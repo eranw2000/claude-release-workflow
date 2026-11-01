@@ -40,6 +40,41 @@ import time
 
 PS = "/bin/ps"
 POLL = 0.05
+IS_WINDOWS = os.name == "nt"
+
+
+def _win_process_info(pid):
+    """(alive, start time) for a pid on Windows, read through the Win32 API.
+
+    Never os.kill(pid, 0) on Windows. Python docs, os.kill: "Any other value for
+    sig will cause the process to be unconditionally killed by the TerminateProcess
+    API", so the POSIX "is it there" probe would kill what it was asked about.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    process_query_limited_information = 0x1000
+    error_access_denied = 5
+    still_active = 259
+    handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
+    if not handle:
+        # Access denied means the process exists and belongs to someone else.
+        return ctypes.get_last_error() == error_access_denied, None
+    try:
+        code = wintypes.DWORD()
+        alive = bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == still_active
+        times = [wintypes.FILETIME() for _ in range(4)]
+        ok = kernel32.GetProcessTimes(handle, *[ctypes.byref(t) for t in times])
+        start = "%d:%d" % (times[0].dwHighDateTime, times[0].dwLowDateTime) if ok else None
+        return alive, start
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 class PsUnavailable(Exception):
@@ -50,9 +85,12 @@ def proc_start(pid):
     """The process's start time as `ps -o lstart` prints it, or None when ps
     ran and printed nothing. Raises PsUnavailable when ps itself failed, so a
     broken ps can never read as "that process is gone"."""
+    if IS_WINDOWS:
+        alive, start = _win_process_info(pid)
+        return start if alive else None
     try:
         out = subprocess.run([PS, "-o", "lstart=", "-p", str(int(pid))],
-                             capture_output=True, text=True, timeout=10).stdout
+                             capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace").stdout
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
         raise PsUnavailable(f"{PS} failed ({exc.__class__.__name__})")
     out = " ".join(out.split())
@@ -60,6 +98,8 @@ def proc_start(pid):
 
 
 def pid_exists(pid):
+    if IS_WINDOWS:
+        return _win_process_info(pid)[0]
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -70,11 +110,15 @@ def pid_exists(pid):
 
 
 def identify(pid):
-    """The identity recorded when a process is started."""
-    try:
-        pgid = os.getpgid(pid)
-    except OSError:
-        pgid = None
+    """The identity recorded when a process is started. Windows has no process
+    groups here, so the process itself stands in for its group."""
+    if IS_WINDOWS:
+        pgid = pid
+    else:
+        try:
+            pgid = os.getpgid(pid)
+        except OSError:
+            pgid = None
     try:
         start = proc_start(pid)
     except PsUnavailable:
@@ -84,6 +128,8 @@ def identify(pid):
 
 def group_present(pgid):
     """True while the process group has any member, a zombie included."""
+    if IS_WINDOWS:
+        return _win_process_info(pgid)[0]
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
@@ -96,9 +142,11 @@ def group_present(pgid):
 
 def process_table():
     """{pid: (ppid, pgid, command)} for every process, or {} if ps fails."""
+    if IS_WINDOWS:
+        return {}
     try:
         out = subprocess.run([PS, "-axo", "pid=,ppid=,pgid=,command="],
-                             capture_output=True, text=True, timeout=10).stdout
+                             capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace").stdout
     except (OSError, subprocess.SubprocessError):
         return {}
     table = {}
@@ -148,7 +196,10 @@ def check_identity(ident):
     pid, pgid, start = ident.get("pid"), ident.get("pgid"), ident.get("start")
     if not (isinstance(pid, int) and isinstance(pgid, int) and pid > 0 and pgid > 0):
         return False, "identity incomplete: pid and pgid must be recorded"
-    if pgid == os.getpgrp():
+    if IS_WINDOWS:
+        if pid == os.getpid():
+            return False, f"pid {pid} is the caller itself"
+    elif pgid == os.getpgrp():
         return False, f"group {pgid} is the caller's own group"
     if not start:
         return False, f"no start time was recorded for pid {pid}"
@@ -162,6 +213,8 @@ def check_identity(ident):
         return False, f"leader {pid} is gone, so group {pgid} cannot be proved ours"
     if now != start:
         return False, f"pid {pid} was reused: started {now!r}, recorded {start!r}"
+    if IS_WINDOWS:
+        return True, "leader alive, identity matches"
     try:
         if os.getpgid(pid) != pgid:
             return False, f"pid {pid} is no longer in group {pgid}"
@@ -170,6 +223,32 @@ def check_identity(ident):
     except OSError as exc:
         return False, f"cannot read the group of pid {pid} ({exc.__class__.__name__})"
     return True, "leader alive, identity matches"
+
+
+def _win_stop(pid, grace, leader, kill_wait, result):
+    """Windows half of stop_group: end the process and its children with taskkill.
+
+    Microsoft's taskkill page: /t "Ends the specified process and any child
+    processes started by it"; /f "Specifies that processes be forcefully ended".
+    A child whose parent has already exited cannot be found this way, and that is
+    not reported, because there is no process table here to compare against.
+    """
+    if not group_present(pid):
+        result.update(outcome="stopped", reason="group already empty")
+        return result
+    polite = subprocess.run(["taskkill", "/PID", str(pid), "/T"], capture_output=True)
+    result["term_sent"] = True
+    # A console program with no window refuses the polite form, so do not wait on it.
+    if polite.returncode == 0 and _wait_empty(pid, grace, leader):
+        result.update(outcome="stopped", reason="left after TERM")
+        return result
+    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+    result["kill_sent"] = True
+    if _wait_empty(pid, kill_wait, leader):
+        result.update(outcome="stopped", reason="left after KILL")
+    else:
+        result.update(outcome="members-remain", reason=f"process {pid} is still there after KILL")
+    return result
 
 
 def stop_group(ident, grace=10.0, leader=None, kill_wait=5.0):
@@ -184,6 +263,8 @@ def stop_group(ident, grace=10.0, leader=None, kill_wait=5.0):
         return result
     pgid = ident["pgid"]
     _reap(leader)
+    if IS_WINDOWS:
+        return _win_stop(ident["pid"], grace, leader, kill_wait, result)
     table = process_table()
     result["members_before"] = sum(1 for _pp, g, _c in table.values() if g == pgid)
     result["escaped"] = [d for d in descendants(ident["pid"], table) if d["pgid"] != pgid]

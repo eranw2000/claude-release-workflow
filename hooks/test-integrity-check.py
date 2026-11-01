@@ -33,9 +33,15 @@ Python 3.9 compatible (the system python3 may be Xcode's 3.9).
 """
 
 import ast
+import sys
+# Read and write UTF-8 on every OS: the Windows default code page misreads it.
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 import json
 import os
 import re
+import subprocess
 import sys
 
 try:
@@ -965,7 +971,7 @@ def fixture_edit_function(path, old, new):
     if not [l for l in old.splitlines() if l.strip() and l not in new.splitlines()]:
         return None
     try:
-        src = open(path).read()
+        src = open(path, encoding="utf-8").read()
         tree = ast.parse(src)
     except Exception:
         return None
@@ -1001,18 +1007,152 @@ def _first_fixture_note(session_id, path):
     safe = "".join(c for c in str(session_id or "unknown") if c.isalnum() or c in "-_")
     state = os.path.join(FIXTURE_STATE_DIR, (safe or "unknown") + ".json")
     try:
-        seen = json.load(open(state))
+        seen = json.load(open(state, encoding="utf-8"))
     except Exception:
         seen = []
     if path in seen:
         return False
     try:
         os.makedirs(FIXTURE_STATE_DIR, exist_ok=True)
-        with open(state, "w") as fh:
+        with open(state, "w", encoding="utf-8", newline="") as fh:
             json.dump(seen + [path], fh)
     except Exception:
         pass
     return True
+
+
+# Check G: a test's stand-in (a method of a Fake/Stub class, or a mock.patch target)
+# copies a function this same change just ADDED to real code, so the new code itself may
+# never run under test.
+# The stand-in encodes the author's belief about the new code, so the test passes
+# on that belief. This fires the first time a test file holds such a stand-in in a
+# session, when one test through the real code is cheapest to add.
+_FAKE_CLASS_RE = re.compile(r"^(?:Fake|Stub)")
+_ADDED_DEF_RE = re.compile(r"^\+\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(")
+_REMOVED_DEF_RE = re.compile(r"^-\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(")
+_ANY_DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(", re.M)
+FAKE_MIRROR_NOTE = (
+    "FAKE MIRRORS NEW CODE in {path}: {items}. A stand-in for code this change just wrote "
+    "tests your belief about that code, not the code. Make sure at least one test runs the "
+    "REAL new function with only the transport faked (the HTTP session, the clock, the "
+    "filesystem), never a fake of a layer in between, or a guard in that layer stays unseen. "
+    "(Shown once per stand-in per session.)")
+
+
+def _is_test_path(rel):
+    parts = rel.split("/")
+    return "tests" in parts[:-1] or "test" in parts[:-1] or eligible(rel) \
+        or parts[-1] == "conftest.py"
+
+
+def _git(repo, *args):
+    try:
+        r = subprocess.run(["git", "-C", repo] + list(args), capture_output=True,
+                           text=True, timeout=5, encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _diff_base(repo):
+    """Where this change starts: the merge base with the remote's default branch, else HEAD."""
+    for ref in ("origin/HEAD", "origin/main", "origin/master"):
+        base = (_git(repo, "merge-base", "HEAD", ref) or "").strip()
+        if base:
+            return base
+    return "HEAD"
+
+
+def added_real_defs(repo, base=None, head=None):
+    """{name: path} of each function a non-test .py file gained since `base`, up to `head`
+    (or the working tree, untracked files included, when head is None). A def whose line
+    only changed (removed and re-added in the same file) is not new."""
+    base = base or _diff_base(repo)
+    out = _git(repo, "diff", "--unified=0", "--no-color", "--no-ext-diff", base,
+               *([head] if head else []), "--", "*.py") or ""
+    added, removed, path = {}, set(), None
+    for line in out.splitlines():
+        if line.startswith("+++ ") or line.startswith("--- "):
+            if line.startswith("+++ "):
+                p = line[4:]
+                path = p[2:] if p.startswith("b/") and not _is_test_path(p[2:]) else None
+            continue
+        if path is None:
+            continue
+        m = _ADDED_DEF_RE.match(line)
+        if m:
+            added.setdefault(m.group(1), path)
+            continue
+        m = _REMOVED_DEF_RE.match(line)
+        if m:
+            removed.add((m.group(1), path))
+    if head is None:
+        for rel in (_git(repo, "ls-files", "--others", "--exclude-standard", "--", "*.py") or "").split():
+            if _is_test_path(rel):
+                continue
+            try:
+                src = open(os.path.join(repo, rel), encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            for name in _ANY_DEF_RE.findall(src):
+                added.setdefault(name, rel)
+    return {n: p for n, p in added.items()
+            if not n.startswith("__") and (n, p) not in removed}
+
+
+def _patch_target(call):
+    """The attribute a mock.patch / patch.object call replaces, or None."""
+    func = call.func
+    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+    args = call.args
+    if name == "object" and isinstance(func, ast.Attribute) and len(args) >= 2:
+        inner = func.value
+        if (getattr(inner, "attr", None) or getattr(inner, "id", None)) == "patch":
+            arg = args[1]
+            return arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else None
+    if name == "patch" and args and isinstance(args[0], ast.Constant) and isinstance(args[0].value, str):
+        return args[0].value.rsplit(".", 1)[-1]
+    return None
+
+
+def fake_mirror_findings(src, added):
+    """One line per stand-in in `src` that copies a name in `added` ({name: real path})."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and _FAKE_CLASS_RE.match(node.name):
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name in added:
+                    found.append("%s.%s stands in for %s, new in %s"
+                                 % (node.name, item.name, item.name, added[item.name]))
+        elif isinstance(node, ast.Call):
+            target = _patch_target(node)
+            if target and target in added:
+                found.append("a mock.patch of %s (line %d) stands in for %s, new in %s"
+                             % (target, node.lineno, target, added[target]))
+    return list(dict.fromkeys(found))
+
+
+def fake_mirror_note(path, scope):
+    repo = (_git(os.path.dirname(os.path.abspath(path)), "rev-parse", "--show-toplevel") or "").strip()
+    if not repo:
+        return None
+    try:
+        src = open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return None
+    if "Fake" not in src and "Stub" not in src and "patch" not in src:
+        return None
+    findings = fake_mirror_findings(src, added_real_defs(repo))
+    state = os.environ.get("FAKE_MIRROR_STATE_DIR") or os.path.expanduser(
+        "~/.claude/hooks/.fake-mirror-seen")
+    fresh = [f for f in findings if _first_seen(state, scope, path + "::" + f)]
+    if not fresh:
+        return None
+    return FAKE_MIRROR_NOTE.format(path=path, items="; ".join(fresh))
 
 
 # Check F: a script that hands out PASS/FAIL verdicts, wherever it lives (a tools/
@@ -1046,14 +1186,14 @@ def _first_seen(state_dir, session_id, path):
     safe = "".join(c for c in str(session_id or "unknown") if c.isalnum() or c in "-_")
     state = os.path.join(state_dir, (safe or "unknown") + ".json")
     try:
-        seen = json.load(open(state))
+        seen = json.load(open(state, encoding="utf-8"))
     except Exception:
         seen = []
     if path in seen:
         return False
     try:
         os.makedirs(state_dir, exist_ok=True)
-        with open(state, "w") as fh:
+        with open(state, "w", encoding="utf-8", newline="") as fh:
             json.dump(seen + [path], fh)
     except Exception:
         pass
@@ -1152,6 +1292,10 @@ def run_hook():
         elif via_bash and appended:
             # Warn on a clean append too.
             messages.append(APPEND_NOTE.format(path=path))
+        if status != UNPARSEABLE:
+            note = fake_mirror_note(path, _once_scope(data))
+            if note:
+                messages.append(note)
         if tool == "Edit":
             name = fixture_edit_function(path, tool_input.get("old_string") or "",
                                          tool_input.get("new_string") or "")

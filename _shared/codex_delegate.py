@@ -129,9 +129,13 @@ Exit codes, all distinct so a caller can say WHY it did not run:
 """
 
 import argparse
+import sys
+# Read and write UTF-8 on every OS: the Windows default code page misreads it.
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 import binascii
 import datetime
-import fcntl
 import hashlib
 import json
 import os
@@ -243,7 +247,7 @@ def preflight():
     if not auth.exists():
         return EXIT_NO_CRED, f"no Codex credential at {auth}; run `codex login` ({OFF_HINT})"
     try:
-        mode = json.load(open(auth)).get("auth_mode")
+        mode = json.load(open(auth, encoding="utf-8")).get("auth_mode")
     except Exception as exc:                       # noqa: BLE001
         return EXIT_NO_CRED, f"{auth} is unreadable ({exc.__class__.__name__})"
     if not mode:
@@ -325,8 +329,8 @@ def write_failure(rundir, run_id, label, reason_code, reason_text, exit_code,
         "utc": datetime.datetime.now(datetime.timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"),
     }
-    (rundir / "failure.json").write_text(json.dumps(payload, indent=2,
-                                                    sort_keys=True))
+    (rundir / "failure.json").write_bytes((json.dumps(payload, indent=2,
+                                                    sort_keys=True)).encode("utf-8"))
 
 
 def find_inability(answer):
@@ -406,7 +410,7 @@ def cli_version():
     try:
         proc = subprocess.run(["codex", "--version"], stdin=subprocess.DEVNULL,
                               capture_output=True, text=True,
-                              timeout=VERSION_TIMEOUT)
+                              timeout=VERSION_TIMEOUT, encoding="utf-8", errors="replace")
     except Exception:                              # noqa: BLE001
         return "unknown"
     if proc.returncode != 0:
@@ -483,7 +487,7 @@ def resolve_commit(checkout, rev, name):
         proc = subprocess.run(
             ["git", "-C", checkout, "rev-parse", "--verify", "--quiet",
              f"{rev}^{{commit}}"],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise contract.ContractError(
             "unresolvable-commit",
@@ -506,7 +510,7 @@ def check_checkout_is_head(checkout, head_sha, allow_untracked=False):
         try:
             proc = subprocess.run(["git", "-C", checkout, *args],
                                   stdin=subprocess.DEVNULL, capture_output=True,
-                                  text=True, timeout=30)
+                                  text=True, timeout=30, encoding="utf-8", errors="replace")
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise contract.ContractError(
                 "checkout-not-at-head", f"git did not answer ({exc.__class__.__name__})")
@@ -569,7 +573,7 @@ def origin_url(checkout):
     try:
         proc = subprocess.run(
             ["git", "-C", checkout, "remote", "get-url", "origin"],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired):
         return None
     return proc.stdout.strip() if proc.returncode == 0 else None
@@ -670,7 +674,7 @@ def run(prompt, repo, out, sandbox, timeout, model, label, isolated=False,
     lock_path = out.parent / (out.name + ".lock")
     lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_file(lock_fd)
     except OSError:
         os.close(lock_fd)
         print(f"CODEX {label}: LOCKED, another job holds {out} "
@@ -683,8 +687,32 @@ def run(prompt, repo, out, sandbox, timeout, model, label, isolated=False,
                            reasoning_effort, profile_reason, smoke,
                            allow_untracked)
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        _unlock_file(lock_fd)
         os.close(lock_fd)
+
+
+def _lock_file(fd):
+    """Take the job lock without waiting, or raise OSError when another job holds it."""
+    if os.name == "nt":
+        # Python docs, msvcrt.locking: LK_NBLCK "Locks the specified bytes. If the
+        # bytes cannot be locked, OSError is raised." The region starts at the file
+        # position, so go to the start first.
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(fd):
+    if os.name == "nt":
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 class Interrupted(BaseException):
@@ -715,7 +743,7 @@ def write_json_atomic(path, doc):
     file or the whole new one, never half of it."""
     path = pathlib.Path(path)
     tmp = path.parent / (path.name + ".tmp")
-    with open(str(tmp), "w") as fh:
+    with open(str(tmp), "w", encoding="utf-8", newline="") as fh:
         fh.write(json.dumps(doc, indent=2, sort_keys=True))
         fh.flush()
         os.fsync(fh.fileno())
@@ -894,7 +922,7 @@ def _run_locked(prompt, repo, out, sandbox, timeout, model, label, isolated,
             # One line naming the class and the size, and the text goes to a file.
             klass = "child-signal" if proc.returncode < 0 else "child-nonzero"
             if stderr_text:
-                (rundir / "child-stderr.txt").write_text(stderr_text)
+                (rundir / "child-stderr.txt").write_bytes((stderr_text).encode("utf-8"))
             # Only type, code and param are kept. A rejection is exit 12 and is
             # never retried on the same model: the identical request would be
             # rejected again.
@@ -996,8 +1024,8 @@ def _run_locked(prompt, repo, out, sandbox, timeout, model, label, isolated,
             "out": str(out),
             "utc": utc_now(),
         }
-        (rundir / "manifest.json").write_text(json.dumps(manifest, indent=2,
-                                                         sort_keys=True))
+        (rundir / "manifest.json").write_bytes((json.dumps(manifest, indent=2,
+                                                         sort_keys=True)).encode("utf-8"))
         print(f"CODEX {label}: OK, model={model or 'codex-default'}, "
               f"sandbox={sandbox}, tokens={tokens}, "
               f"{len(answer)} chars -> {out} (run {run_id})")
@@ -1049,8 +1077,8 @@ def run_codex_group(cmd, timeout, rundir, run_id, env=None, cwd=None):
     passed to Popen; None inherits the caller's."""
     # stdin closed: codex blocks reading it otherwise.
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, start_new_session=True,
-                            env=env, cwd=cwd)
+                            stderr=subprocess.PIPE, text=True, start_new_session=(os.name != "nt"),
+                            env=env, cwd=cwd, encoding="utf-8", errors="replace")
     ident, record = None, None
     try:
         # Inside the protected block from the first instruction after the
@@ -1203,7 +1231,7 @@ def main():
         pf = pathlib.Path(a.prompt_file).expanduser()
         if not pf.is_file():
             ap.error(f"no prompt file at {pf}")
-        prompt = pf.read_text()
+        prompt = pf.read_text(encoding="utf-8")
     if not prompt.strip():
         ap.error("the prompt is empty")
 

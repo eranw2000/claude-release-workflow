@@ -85,6 +85,11 @@ it never sees it. Shell state does not persist between Bash calls either, so an
 `export` in an earlier call does not reach it.
 """
 import json
+import sys
+# Read and write UTF-8 on every OS: the Windows default code page misreads it.
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 import os
 import re
 import subprocess
@@ -490,7 +495,7 @@ def current_branch(directory):
     try:
         proc = subprocess.run(
             ["git", "-C", directory, "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace",
         )
     except Exception:
         return None
@@ -514,7 +519,7 @@ def remote_head_branch(directory, remote):
             proc = subprocess.run(
                 ["git", "-C", directory, "symbolic-ref", "-q", "--short",
                  "refs/remotes/%s/HEAD" % remote],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace",
             )
         except Exception:
             proc = None
@@ -548,7 +553,7 @@ def push_urls(directory, remote):
         return []
     try:
         proc = subprocess.run(["git", "-C", directory, "remote", "get-url", "--push", "--all", remote],
-                              capture_output=True, text=True, timeout=5)
+                              capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
     except Exception:
         return []
     if proc.returncode != 0:
@@ -560,7 +565,7 @@ def local_refs(directory, *namespaces):
     """Every ref under the given namespaces (refs/heads, refs/tags), or None."""
     try:
         proc = subprocess.run(["git", "-C", directory, "for-each-ref", "--format=%(refname)"]
-                              + list(namespaces), capture_output=True, text=True, timeout=5)
+                              + list(namespaces), capture_output=True, text=True, timeout=5, encoding="utf-8", errors="replace")
     except Exception:
         return None
     if proc.returncode != 0:
@@ -600,7 +605,7 @@ def pushed_sources(directory, refspecs, flags):
 def harness_files_in(directory, ref):
     try:
         proc = subprocess.run(["git", "-C", directory, "ls-tree", "-r", "--name-only", ref],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace")
     except Exception:
         return []
     if proc.returncode != 0:
