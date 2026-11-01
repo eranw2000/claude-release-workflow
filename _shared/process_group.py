@@ -230,8 +230,6 @@ def _win_stop(pid, grace, leader, kill_wait, result):
 
     Microsoft's taskkill page: /t "Ends the specified process and any child
     processes started by it"; /f "Specifies that processes be forcefully ended".
-    A child whose parent has already exited cannot be found this way, and that is
-    not reported, because there is no process table here to compare against.
     """
     if not group_present(pid):
         result.update(outcome="stopped", reason="group already empty")
