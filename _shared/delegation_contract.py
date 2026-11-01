@@ -141,7 +141,7 @@ def check_publication(out, expect_request_id, require_certified=False):
     if not rpath.is_file():
         raise ContractError("no-receipt", f"no published receipt at {rpath}")
     try:
-        receipt = strict_loads(rpath.read_text())
+        receipt = strict_loads(rpath.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError) as exc:
         raise ContractError("bad-receipt", f"{rpath} unreadable ({exc.__class__.__name__})")
     except ContractError as exc:
@@ -204,7 +204,7 @@ def load_profile(path, name):
     A missing, unreadable or malformed file refuses; it is never defaulted
     because a silent default is a silent model switch."""
     try:
-        doc = strict_loads(pathlib.Path(path).read_text())
+        doc = strict_loads(pathlib.Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError) as exc:
         raise ContractError("bad-profile-file",
                             f"{path} unreadable ({exc.__class__.__name__})")

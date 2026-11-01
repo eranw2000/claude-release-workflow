@@ -38,6 +38,12 @@ Python 3.9 compatible. Never pushes; the caller pushes (replay with --force-with
 merge-ours needs no force).
 """
 import argparse
+import sys
+# Read and write UTF-8 on every OS: the Windows default code page misreads it.
+if __name__ == "__main__":
+    for _stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
 import json
 import os
 import shutil
@@ -49,7 +55,7 @@ IGNORE = ".gitleaksignore"
 
 
 def git(repo, *args, check=True):
-    p = subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True)
+    p = subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True, encoding="utf-8", errors="replace")
     if check and p.returncode != 0:
         raise RuntimeError("git %s failed: %s" % (" ".join(args), p.stderr.strip()))
     return p
@@ -111,8 +117,8 @@ def gitleaks_findings(repo, rng):
     try:
         subprocess.run(["gitleaks", "git", "--no-banner", "--log-opts=" + rng,
                         "--report-format", "json", "--report-path", path, repo],
-                       capture_output=True, text=True)
-        with open(path) as fh:
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+        with open(path, encoding="utf-8") as fh:
             data = fh.read().strip()
         return [f["Fingerprint"] for f in (json.loads(data) if data else [])]
     finally:
@@ -150,11 +156,11 @@ def replay(repo, old_base, new_base, reviewed):
         if found is None:
             print("NOTE: gitleaks is not installed; %s not re-checked" % IGNORE)
         elif found:
-            with open(ignore) as fh:
+            with open(ignore, encoding="utf-8") as fh:
                 lines = fh.read().split("\n")
             new_lines, moved = repoint_fingerprints(lines, found)
             if moved:
-                with open(ignore, "w") as fh:
+                with open(ignore, "w", encoding="utf-8", newline="") as fh:
                     fh.write("\n".join(new_lines))
                 git(repo, "add", IGNORE)
                 git(repo, "commit", "-q", "-m",

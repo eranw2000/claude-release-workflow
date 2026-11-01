@@ -59,7 +59,7 @@ BASELINE="${SECURITY_SCAN_BASELINE:-$HOME/.claude/skills/_shared/security-standa
 # (SECURITY_SCAN_PYTHON first); with none, plain python3, and the scan says BASELINE UNREAD.
 pick_yaml_python () {
   local p
-  for p in ${SECURITY_SCAN_PYTHON:-} $(type -ap python3) "$HOME/miniconda3/bin/python3" /usr/bin/python3; do
+  for p in ${SECURITY_SCAN_PYTHON:-} $(type -ap python3) $(type -ap python) "$HOME/miniconda3/bin/python3" /usr/bin/python3; do
     [ -x "$p" ] && "$p" -c 'import yaml' >/dev/null 2>&1 && { echo "$p"; return; }
   done
   echo python3
@@ -173,12 +173,12 @@ if [ "$MODE" != "--all" ] && [ "$N_SOURCE" -gt 0 ]; then
   # 2026-09-02, in this very fix. A diff that is non-empty but yields no added lines for
   # some file is a different thing and is a legitimate answer.
   if [ -s "$TMP/added.diff" ]; then
-  python3 - "$TMP/added.diff" > "$TMP/added.json" 2>/dev/null <<'PYADD'
+  "$YAML_PY" - "$TMP/added.diff" > "$TMP/added.json" 2>/dev/null <<'PYADD'
 import json, re, sys
 # Parse a unified=0 diff into {path: [added line numbers in the NEW file]}.
 path, out = None, {}
 hunk = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-for line in open(sys.argv[1], errors="ignore"):
+for line in open(sys.argv[1], encoding="utf-8", errors="ignore"):
     if line.startswith("+++ "):
         p = line[4:].strip()
         path = None if p == "/dev/null" else (p[2:] if p.startswith("b/") else p)
