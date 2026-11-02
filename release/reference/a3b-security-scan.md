@@ -68,6 +68,9 @@ gate. Since that date the scan tags every finding and prints the split:
   waiver register or in the project TODO, and it is not this release's job.
 - **`[UNKNOWN]`**, meaning no added-line map could be built. **Treat these as `NEW`**, which
   is the direction the tagger itself fails in, deliberately.
+- **`untouched:`**, the manifests this change did not touch, which still ship. It does NOT block
+  the release and does not change the exit code. **Copy its `Total` line, or its `NOT CHECKED`,
+  into the final report**, and add one project TODO item for a hit the TODO does not hold yet.
 
 **Then the gate: a release needs no unresolved blocking `[NEW]` finding, and every accepted
 high finding named in the waiver register** at `~/.claude/skills/_shared/security-standards/baseline.yml`,
