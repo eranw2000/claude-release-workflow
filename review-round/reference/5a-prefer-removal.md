@@ -33,6 +33,14 @@ cache in another process holds the old value". Before committing, list every pat
 the changed function can reach that consumer: each return, an exception from EVERY call the
 fix adds, and every write on each of those paths. Put the list in the fix commit message.
 
+**When a fix changes WHAT a guard trusts, list every PRODUCER of the trusted value too.** A
+fix that switches the evidence a check accepts ("only a state written as a two-letter code"),
+or drops one copy of a repeated value, is safe only if nothing else can produce that value.
+Grep for every writer of the field, column or cell the guard now reads (code that builds the
+text, a merge that combines two rows, a fallback that copies one), and every entry of the
+input list that can carry the same value. Done when the fix commit message names each
+producer and says why it cannot forge the value, or the fix covers it.
+
 **When a fix REMOVES or REPLACES a call (a normalizer, a conversion, a filter, a check), list
 every OTHER reader of what that call produced before committing.** Grep the function for each
 use of the value after the line you changed, and the callers for each use of its return value.

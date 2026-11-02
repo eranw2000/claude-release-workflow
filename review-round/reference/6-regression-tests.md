@@ -2,6 +2,8 @@
 bound, gets the four numbered steps under "So when a finding says something is untested"
 below, BEFORE it is written.** They sit far down this file, so a partial read misses them.
 
+**A fix that reads real-world text (a filing, a document, a log, a page) runs once on a real sample before the verdict, and you read what it returned.** A test on a sentence written for it passes on the shape you already had in mind.
+
 Prove each new test by mutation (break the guard, confirm exactly that test fails,
 restore by re-applying the code, never `git checkout`) or by contrast (the same
 input with the gate un-armed produces the opposite outcome). A test with several

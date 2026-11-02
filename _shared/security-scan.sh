@@ -209,7 +209,45 @@ else
   echo "  manifests listed:    $N_MANIFEST"
 fi
 
+# Manifests this release does NOT touch still ship, so their known holes are live, and the scan
+# reads them too. The answer is a report and never a block: a repo cannot clear a backlog in the middle of an unrelated
+# release, and a gate the present cannot pass gets switched off.
+scan_untouched () {
+  [ -n "$SINCE_REF" ] || return 0
+  local f m known
+  local untouched=()
+  while IFS= read -r -d '' f; do
+    [ -f "$f" ] || continue
+    printf '%s' "$f" | grep -Eq "$MANIFEST_RE" || continue
+    known=0
+    for m in ${MANIFEST_FILES[@]+"${MANIFEST_FILES[@]}"}; do
+      [ "$m" = "$f" ] && known=1
+    done
+    [ "$known" -eq 0 ] && untouched+=("$f")
+  done < <(git ls-files -z 2>/dev/null)
+  [ "${#untouched[@]}" -gt 0 ] || return 0
+  if ! command -v osv-scanner >/dev/null 2>&1; then
+    echo "  untouched: NOT CHECKED, osv-scanner is missing (${#untouched[@]} manifest(s)). Not a clean result."
+    return 0
+  fi
+  local args=() code
+  for m in "${untouched[@]}"; do args+=(--lockfile "$m"); done
+  osv-scanner scan source "${args[@]}" > "$TMP/osv_untouched.txt" 2>&1
+  code=$?
+  if [ "$code" -eq 1 ]; then
+    echo "  untouched: known vulnerabilities in ${#untouched[@]} manifest(s) this change did not touch."
+    echo "             PRE-EXISTING: already live, and not from this change. It does not block."
+    echo "             Name it in the release report, with its Total line."
+    strip_ansi < "$TMP/osv_untouched.txt" | grep -E "^Total |^\| https" | head -20 | sed 's/^/    /'
+  elif [ "$code" -eq 0 ]; then
+    echo "  untouched: clean over ${#untouched[@]} manifest(s)"
+  else
+    echo "  untouched: NOT CHECKED, osv-scanner failed (exit $code) on ${#untouched[@]} manifest(s). Not a clean result."
+  fi
+}
+
 if [ "$N_SOURCE" -eq 0 ] && { [ "$N_MANIFEST" -eq 0 ] || [ "$SKIP_DEPS" -eq 1 ]; }; then
+  scan_untouched
   echo "  NOTHING TO SCAN. This is not a pass. No path matched a source name."
   exit 2
 fi
@@ -508,6 +546,8 @@ if [ "$N_MANIFEST" -gt 0 ] && [ "$SKIP_DEPS" -eq 0 ]; then
     fi
   fi
 fi
+
+scan_untouched
 
 # ----------------------------------------------------------------------------- verdict
 # Findings and incomplete are independent facts. A run that found something AND failed to

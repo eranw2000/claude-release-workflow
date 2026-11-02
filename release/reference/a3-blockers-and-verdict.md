@@ -48,3 +48,4 @@ CANDIDATE_SHA=$HEAD_SHA    # this iteration's candidate pin: what A3b scans and 
   A missing verdict is legitimate and common (a docs-only fix, a one-line revert).
   Surfacing it costs one confirmation; not surfacing it costs an unreviewed
   production merge nobody notices.
+

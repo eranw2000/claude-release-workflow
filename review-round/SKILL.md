@@ -111,6 +111,11 @@ Reproduce each chosen finding by running the failing input through the real path
 
 **Read `~/.claude/skills/review-round/reference/4-reproduce.md` now, in full, and follow it. It is this step's full text; the line above is only a summary and is not enough to act on.**
 
+**Before writing any fix, list by command every path to the finding's RESULT (step 5a) and put
+the list in the fix commit message**: a finding names one site, its result usually has others.
+Check the FINAL value once, after every step that can replace it (a correction, an override),
+never each source: a source check refuses a value a later step would have fixed.
+
 ### 5. Verify suggestions against the authoritative gate
 
 A reviewer's proposed fix is a hypothesis. Check it against the authoritative

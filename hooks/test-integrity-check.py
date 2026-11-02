@@ -71,6 +71,9 @@ def eligible(path):
         return False
     # `tests.py` is DJANGO'S DEFAULT NAME, one per app. It matches neither the
     # `test_` prefix nor the `_test` suffix, so it is listed by name.
+    # `browser_*.py` under tests/ is a common name for a browser check.
+    if base.startswith("browser_") and "tests" in path.split(os.sep):
+        return True
     return (base.startswith("test_") or base[:-3].endswith("_test")
             or base in ("tests.py", "test.py"))
 
@@ -700,6 +703,49 @@ _ABSENCE_ONLY = {"assertNotContains"}
 _PRESENCE = {"assertContains", "assertInHTML", "assertTemplateUsed", "assertRedirects"}
 
 
+_CHECK_CALLS = frozenset({"check", "ok", "expect", "assertTrue"})
+
+
+def _literal_check(node):
+    """True or False when `node` is a check whose verdict is that literal, else None.
+
+    Covers `assert True`, `assertTrue(True)`, and a house `check(cond, label)` or
+    `check(label, cond)`, so the first two arguments are read."""
+    if isinstance(node, ast.Assert):
+        test = node.test
+        return test.value if isinstance(test, ast.Constant) and isinstance(test.value, bool) else None
+    # A statement only: `assertFalse(self.ok("edited", True))` calls a helper named ok, and
+    # the answer it returns is what gets checked.
+    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+        call = node.value
+        if _call_name(call.func) in _CHECK_CALLS:
+            for arg in call.args[:2]:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, bool):
+                    return arg.value
+    return None
+
+
+def _check_always_true(tree):
+    """A check that says True by itself reports success whatever the code did.
+
+    Allowed only as one arm of a branch: an If or Try that also holds a literal False, as
+    in `try: f(); check(False, ...)` then `except SystemExit: check(True, ...)`. There the
+    branch taken is the assertion, and it can fail."""
+    allowed = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.If, ast.Try)):
+            verdicts = [(n, _literal_check(n)) for n in ast.walk(node)]
+            if any(v is False for _, v in verdicts):
+                allowed.update(id(n) for n, v in verdicts if v is True)
+    return ["ALWAYS-TRUE CHECK at line %d: this check says True by itself, so all it can prove "
+            "is that the lines before it did not raise. If its words claim more than that, "
+            "assert the thing itself (read the saved value back, compare the answer's status), "
+            "with values that differ from run to run if the fixture keeps old data."
+            % n.lineno
+            for n in ast.walk(tree)
+            if _literal_check(n) is True and id(n) not in allowed]
+
+
 def _text_arg(call):
     """The literal text an assertContains/assertNotContains looks for, or None."""
     arg = call.args[1] if len(call.args) > 1 else next(
@@ -869,6 +915,7 @@ def analyze(path):
     findings.extend(_check_absence_only(tree))
     findings.extend(_check_bare_name_order(tree))
     findings.extend(_check_render_name_request_only(tree))
+    findings.extend(_check_always_true(tree))
 
     guard_idx = None
     guard = None
