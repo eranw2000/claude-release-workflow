@@ -32,6 +32,14 @@ derive from your fix: other punctuation, case, subject (we / a company / "export
 question versus a statement, a two-word name for a code. Put the siblings in the test. Each
 sibling that changes verdict is a finding before the reviewer sees the fix.
 
+**When that rule is a GUARD (a hook that blocks or warns), run the same siblings through the
+INSTALLED copy and the fixed copy, side by side, before re-review.** Add siblings built from
+the guard's own moving parts: the shape behind each wrapper word and keyword it reads, inside
+quotes, after a newline, and with the guard's own `git` or file read failing. Any row where
+the fix is quieter than the installed copy (block to warn, block or warn to pass) is a
+regression and a finding, even with zero past uses. A corpus replay cannot see it, because
+the shape has never been typed.
+
 **A test written to close an "X IS UNTESTED" finding is the single most likely place to
 write a vacuous one, and mutation is the only thing that sees it.** Measured on a real
 project: a reviewer reported that an ordering band had no test; the test written
@@ -61,7 +69,10 @@ right rule and the wrong one agree by arithmetic.
    code), and **something already there passes the check** (a seed row, a default, a
    neighbour that matches the filter).
 2. **Choose ONE fixture that answers differently under every one of them.** If you cannot,
-   the fixture is wrong, not the assertion. This is the step that gets skipped.
+   the fixture is wrong, not the assertion. This is the step that gets skipped. **A value
+   the product DERIVES (a slug from a name, a code from a format) comes from the product's
+   own function, never typed short by hand**: the made-up value is the one input that
+   cannot reach a length, width or wrap failure.
 3. **Put that list in the test's own docstring**, with the answer each rule would give, so
    a later reader can re-run the check by reading.
 4. **Mutate to each wrong rule in turn**, not only to "the rule deleted", and confirm the

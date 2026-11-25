@@ -30,6 +30,10 @@ because the destination side is staging, so it does not land on main.
 Deliberately unchanged: a bare push resolves the target repo's current branch,
 because `git push` with no refspec lands on main without the word appearing.
 
+WHAT ONLY WARNS: text the parser cannot read, a push nested past two `bash -c`, and a
+directory that holds a variable. Each is a guess about the shell text, and a line it could
+not read does not stop the next line being read. A push it can read still blocks.
+
 THREE HOLES CLOSED 2026-09-11 (review item F04 / plan item A5)
   1. `git push --all` and `git push --mirror` send every local branch, so they
      land on a protected branch whatever branch happens to be checked out. They
@@ -99,12 +103,17 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import _bash_command_parse                  # noqa: E402
 from _bash_command_parse import (           # noqa: E402
     UnparseableCommand, cd_target, git_call, nested_shell_command,
     positional_args, split_segments, strip_heredocs, strip_prefixes, tokenize,
 )
+from _hook_warn import emit_warn            # noqa: E402
 
 PROTECTED = ("main", "master")
+# What main() says on a clean exit: text it could only guess at, never a push it read.
+WARNINGS = []
+EVERY_FOLDER = False
 
 # `git push` flags that consume the NEXT token as their value. Deliberately NOT
 # --force-with-lease: it is either bare or `=<ref>`, never a separate token, and
@@ -399,13 +408,13 @@ def push_invocations(segments, depth=0, cd_dir=None):
         if depth >= 2:
             # Out of nesting budget with text still to run. Unknown is not clean.
             if LOOKS_LIKE_PUSH_RE.search(inner):
-                block(RAW_COMMAND, "a git push nested deeper than this guard follows")
+                WARNINGS.append("a git push nested deeper than this guard follows")
             continue
         try:
             nested = split_segments(tokenize(inner))
         except UnparseableCommand:
             if LOOKS_LIKE_PUSH_RE.search(inner):
-                block(RAW_COMMAND, "a nested command could not be parsed, blocking conservatively")
+                WARNINGS.append("could not read a nested command that mentions a git push")
             continue
         for found_call, found_dir in push_invocations(nested, depth + 1):
             yield found_call, (found_dir or cd_dir)
@@ -481,13 +490,39 @@ def refspec_has_head_source(refspec):
     return ":" not in spec and spec.strip() in HEAD_ALIASES
 
 
+def _expand_home(target):
+    """`$HOME`, `${HOME}` and `~` are known here. Any other variable is not."""
+    target = re.sub(r"\$(?:HOME\b|\{HOME\})", lambda _m: os.path.expanduser("~"), target.strip())
+    return os.path.expanduser(target)
+
+
+def known_only_at_run_time(path):
+    # A backtick counts too: inside `bash -c '...'` a real `...` is not flattened to SUBSTITUTION.
+    return "$" in path or "`" in path or SUBSTITUTION in path
+
+
+def unknown_dir(dash_cs, cd_dir):
+    """The written directory when it can only be known at run time, else None.
+
+    git applies each relative `-C` to the one before it and the first to the `cd`, so the folder
+    is unknown as soon as anything it starts from is. An absolute one depends on nothing before it.
+    """
+    for target in [d for d in reversed(dash_cs) if d] + ([cd_dir] if cd_dir else []):
+        expanded = _expand_home(target)
+        if known_only_at_run_time(expanded):
+            return target
+        if os.path.isabs(expanded):
+            return None
+    return None
+
+
 def resolve_dir(dash_c, cd_dir, cwd):
     """Which repo the push runs in: `git -C <dir>`, else a `cd <dir>`, else cwd."""
     target = dash_c or cd_dir
     if not target:
         return cwd
-    target = os.path.expanduser(target.strip())
-    if "$" in target:
+    target = _expand_home(target)
+    if known_only_at_run_time(target):
         return cwd
     return target if os.path.isabs(target) else os.path.join(cwd, target)
 
@@ -635,6 +670,11 @@ def check_harness(command, call, directory, refspecs, remote):
 
 
 def block(command, why):
+    if EVERY_FOLDER:
+        sys.stderr.write(
+            "This command holds a `cd` inside brackets or a block, so it is judged in every "
+            "folder it could run in. `git -C <repo>` names the target whatever the `cd` does.\n"
+        )
     sys.stderr.write(
         "Blocked: raw `git push` to a protected branch (%s). Use /release, which "
         "updates README + project CLAUDE.md and verifies the deploy as part of "
@@ -653,8 +693,82 @@ def block(command, why):
     sys.exit(2)
 
 
+def judge_push(command, call, call_cd, cwd, bypassed, harness_bypassed):
+    """Every rule for one `git push`, judged in the folder `call_cd` and `cwd` name."""
+    positionals = positional_args(call["args"], PUSH_VALUE_FLAGS)
+    refspecs = positionals[1:] if positionals else []
+    # `--repo=<repo>` is "equivalent to the <repository> argument. If both
+    # are specified, the command-line argument takes precedence" (git-push
+    # manual). So it decides the destination only when no positional does.
+    remote = positionals[0] if positionals else (repo_flag(call["args"]) or "origin")
+    directory = resolve_dir(call["dash_c"], call_cd, cwd)
+    unknown = unknown_dir(call.get("dash_c_all") or [call["dash_c"]], call_cd)
+    if unknown and not (bypassed and harness_bypassed):
+        WARNINGS.append("cannot tell which repo `%s` is, so this push was judged in "
+                        "%s, which may not be where it runs"
+                        % (unknown.replace(SUBSTITUTION, "$(...)"), directory))
+
+    # --- Layer 3: harness files to a client remote. Runs first, and
+    # is not waived by #allow-push-main ---
+    if not harness_bypassed:
+        check_harness(command, call, directory, refspecs, remote)
+
+    if bypassed:
+        return
+
+    # --- Layer 0: the flags that send every branch, so no destination
+    # is written down anywhere in the command text ---
+    everything = push_flags(call["args"]) & PUSH_EVERYTHING_FLAGS
+    if everything:
+        block(command, "%s sends every branch, so it lands on %s too"
+              % (sorted(everything)[0], "/".join(PROTECTED)))
+
+    # One subprocess at most, and only for the refspec shape that
+    # cannot be read without asking the repo.
+    head_branch = None
+    if any(refspec_has_head_source(r) for r in refspecs):
+        head_branch = current_branch(directory)
+
+    # --- Layer 1: a refspec that LANDS ON a protected branch ---
+    for refspec in refspecs:
+        # A destination built by a substitution is unknown until it
+        # runs, and `$(git branch --show-current)` IS the branch the
+        # repo sits on, so it is judged like a bare push.
+        if SUBSTITUTION in refspec_destination(refspec, head_branch=head_branch):
+            if current_branch(directory) in PROTECTED:
+                block(command, "a destination built by command "
+                               "substitution, while on %s"
+                      % current_branch(directory))
+            continue
+        if pushes_matching_branches(refspec):
+            block(command, "a `:` refspec pushes every matching "
+                           "branch, so it lands on %s too"
+                  % "/".join(PROTECTED))
+        dest = refspec_destination(refspec, head_branch=head_branch)
+        if "*" in dest:
+            block(command, "the wildcard destination in %s expands "
+                           "onto every matching branch, %s included"
+                  % (refspec, "/".join(PROTECTED)))
+        if dest in PROTECTED:
+            block(command, "explicit %s destination" % dest)
+        # Only now is the extra subprocess worth it: main and master are
+        # already settled above, so this asks only about anything else.
+        if dest and dest == remote_head_branch(directory, remote):
+            block(command, "%s is the default branch (%s/HEAD) of the "
+                           "target repo" % (dest, remote))
+
+    # --- Layer 2: bare push, which resolves to the current branch ---
+    if not refspecs:
+        branch = current_branch(directory)
+        if branch in PROTECTED:
+            block(command, "bare push while on %s" % branch)
+        if branch and branch == remote_head_branch(directory, remote):
+            block(command, "bare push while on %s, the default branch "
+                           "(%s/HEAD) of this repo" % (branch, remote))
+
+
 def main():
-    global RAW_COMMAND
+    global RAW_COMMAND, EVERY_FOLDER
     allow_main_env = os.environ.get("CLAUDE_ALLOW_PUSH_MAIN") == "1"
     allow_harness_env = os.environ.get("CLAUDE_ALLOW_HARNESS_PUSH") == "1"
     try:
@@ -674,6 +788,7 @@ def main():
     # belongs to its own line. `cd_dir` carries across lines, since a `cd` on
     # an earlier line still decides which repo a later push runs in.
     cd_dir = None
+    pushes = []
     for raw_line, blanked_line in top_level_lines(scannable):
         try:
             flat_line, bodies = flatten_substitutions(raw_line)
@@ -688,12 +803,12 @@ def main():
                 for inner in inner_bodies:
                     body_segments += split_segments(tokenize(inner))
         except UnparseableCommand:
-            # Usually an unbalanced quote. Fall back to the old substring test,
-            # so an odd real push is still caught. Over-blocking is the safe
-            # direction here, and it is why the marker is not consulted: a line
-            # nobody could parse is a line whose quoting nobody can vouch for.
+            # Usually an unbalanced quote, which runs on into the lines after it, so this
+            # text holds those too. A substring test can only guess, so it warns. The marker
+            # is not consulted: a line nobody could parse is a line whose quoting nobody can
+            # vouch for.
             if LOOKS_LIKE_PUSH_RE.search(raw_line):
-                block(command, "command could not be parsed, blocking conservatively")
+                WARNINGS.append("could not read a line that mentions a git push")
             continue
 
         bypassed = allow_main_env or line_grants_bypass(blanked_line, segments + body_segments)
@@ -702,77 +817,26 @@ def main():
             not any(HARNESS_MARKER in tok for seg in segments + body_segments for tok in seg))
 
         for call, call_cd in push_invocations(segments + body_segments, cd_dir=cd_dir):
-            positionals = positional_args(call["args"], PUSH_VALUE_FLAGS)
-            refspecs = positionals[1:] if positionals else []
-            # `--repo=<repo>` is "equivalent to the <repository> argument. If both
-            # are specified, the command-line argument takes precedence" (git-push
-            # manual). So it decides the destination only when no positional does.
-            remote = positionals[0] if positionals else (repo_flag(call["args"]) or "origin")
-            directory = resolve_dir(call["dash_c"], call_cd, cwd)
-
-            # --- Layer 3: harness files to a client remote. Runs first, and
-            # is not waived by #allow-push-main ---
-            if not harness_bypassed:
-                check_harness(command, call, directory, refspecs, remote)
-
-            if bypassed:
-                continue
-
-            # --- Layer 0: the flags that send every branch, so no destination
-            # is written down anywhere in the command text ---
-            everything = push_flags(call["args"]) & PUSH_EVERYTHING_FLAGS
-            if everything:
-                block(command, "%s sends every branch, so it lands on %s too"
-                      % (sorted(everything)[0], "/".join(PROTECTED)))
-
-            # One subprocess at most, and only for the refspec shape that
-            # cannot be read without asking the repo.
-            head_branch = None
-            if any(refspec_has_head_source(r) for r in refspecs):
-                head_branch = current_branch(directory)
-
-            # --- Layer 1: a refspec that LANDS ON a protected branch ---
-            for refspec in refspecs:
-                # A destination built by a substitution is unknown until it
-                # runs, and `$(git branch --show-current)` IS the branch the
-                # repo sits on, so it is judged like a bare push.
-                if SUBSTITUTION in refspec_destination(refspec, head_branch=head_branch):
-                    if current_branch(directory) in PROTECTED:
-                        block(command, "a destination built by command "
-                                       "substitution, while on %s"
-                              % current_branch(directory))
-                    continue
-                if pushes_matching_branches(refspec):
-                    block(command, "a `:` refspec pushes every matching "
-                                   "branch, so it lands on %s too"
-                          % "/".join(PROTECTED))
-                dest = refspec_destination(refspec, head_branch=head_branch)
-                if "*" in dest:
-                    block(command, "the wildcard destination in %s expands "
-                                   "onto every matching branch, %s included"
-                          % (refspec, "/".join(PROTECTED)))
-                if dest in PROTECTED:
-                    block(command, "explicit %s destination" % dest)
-                # Only now is the extra subprocess worth it: main and master are
-                # already settled above, so this asks only about anything else.
-                if dest and dest == remote_head_branch(directory, remote):
-                    block(command, "%s is the default branch (%s/HEAD) of the "
-                                   "target repo" % (dest, remote))
-
-            # --- Layer 2: bare push, which resolves to the current branch ---
-            if not refspecs:
-                branch = current_branch(directory)
-                if branch in PROTECTED:
-                    block(command, "bare push while on %s" % branch)
-                if branch and branch == remote_head_branch(directory, remote):
-                    block(command, "bare push while on %s, the default branch "
-                                   "(%s/HEAD) of this repo" % (branch, remote))
+            judge_push(command, call, call_cd, cwd, bypassed, harness_bypassed)
+            pushes.append((call, bypassed, harness_bypassed))
 
         for segment in segments:
             target = cd_target(segment)
             if target:
                 cd_dir = target
 
+    # A `cd` inside brackets or a block may not move the shell, so such a command is also
+    # judged in every folder it could run in. A block above has already exited.
+    reader = getattr(_bash_command_parse, "extra_folders", None)
+    EVERY_FOLDER = True
+    for folder in (reader(command, cwd) if reader and pushes else []):
+        for call, bypassed, harness_bypassed in pushes:
+            judge_push(command, call, None, folder, bypassed, harness_bypassed)
+
+    if WARNINGS:
+        emit_warn("PUSH-GUARD WARNING (not blocked, proceed if intended): "
+                  + "; ".join(dict.fromkeys(WARNINGS)) + ". If this reaches main or master, "
+                  "use /release instead.")
     sys.exit(0)
 
 
@@ -785,10 +849,13 @@ if __name__ == "__main__":
         # A crashing guard must not wedge every Bash call, but it must also not
         # wave a real push through. So it fails OPEN for ordinary commands and
         # fails CLOSED only for text that looks like a push.
-        sys.stderr.write("block-git-push-main crashed: %r\n" % (exc,))
-        if LOOKS_LIKE_PUSH_RE.search(RAW_COMMAND or ""):
+        # A command that is not text is no push, and must not crash this handler too.
+        if isinstance(RAW_COMMAND, str) and LOOKS_LIKE_PUSH_RE.search(RAW_COMMAND):
+            sys.stderr.write("block-git-push-main crashed: %r\n" % (exc,))
             sys.stderr.write(
                 "The command mentions a push, so it is blocked rather than waved "
                 "through. Re-run with #allow-push-main if it is safe.\n")
             sys.exit(2)
+        from _hook_warn import crash_warn
+        crash_warn("block-git-push-main", exc)
         sys.exit(0)

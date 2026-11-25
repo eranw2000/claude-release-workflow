@@ -536,6 +536,7 @@ if [ "$N_MANIFEST" -gt 0 ] && [ "$SKIP_DEPS" -eq 0 ]; then
     if [ "$OSV" -eq 1 ]; then
       echo "  osv-scanner: known vulnerabilities in $N_MANIFEST manifest(s)"
       strip_ansi < "$TMP/osv.txt" | grep -E "^Total |^\| https" | head -20 | sed 's/^/    /'
+      echo "    To waive one: an [[IgnoredVulns]] entry (id, ignoreUntil, reason) in osv-scanner.toml beside the lockfile; baseline.yml waives semgrep findings only."
       FINDINGS=1
     elif [ "$OSV" -eq 0 ]; then
       echo "  osv-scanner: clean over $N_MANIFEST manifest(s)"

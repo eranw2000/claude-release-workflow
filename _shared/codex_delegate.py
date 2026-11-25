@@ -137,6 +137,7 @@ if __name__ == "__main__":
             _stream.reconfigure(encoding="utf-8", errors="replace")
 import binascii
 import datetime
+import fnmatch
 import hashlib
 import json
 import os
@@ -575,6 +576,75 @@ def check_checkout_is_head(checkout, head_sha, allow_untracked=False):
     return untracked
 
 
+# Names of files that hold live credentials. `git status` omits ignored paths,
+# so the untracked guard above never sees them, yet the review model reads the
+# working directory and can open them and send them to the model provider.
+# Such files are common in local checkouts (a gitignored `.env`, `app/.env.local`,
+# `credentials.json`, a `secrets/` folder), so the run is refused, with no
+# waiver; the remedy is a clean worktree.
+_SECRET_FILE_NAMES = (".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
+                      "id_rsa*", "id_ecdsa*", "id_ed25519*", ".netrc", ".pgpass",
+                      "credentials.json", "service-account*.json", "token.json")
+_SECRET_TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
+_SECRET_DIR_NAMES = ("secrets", ".secrets")
+# An installed package ships public certificates (certifi's cacert.pem); those
+# are not credentials, and a virtualenv inside a repo is common.
+_PACKAGE_DIR_NAMES = ("site-packages", "node_modules", "dist-packages")
+
+
+def secret_files_in_checkout(checkout):
+    """Ignored paths in `checkout` whose names mark them as credentials.
+
+    Uses `git ls-files --others --ignored --exclude-standard --directory`, so a
+    wholly ignored folder is reported once (`secrets/`) rather than walked. Fails
+    CLOSED: when git cannot list, the review refuses."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", checkout, "ls-files", "--others", "--ignored",
+             "--exclude-standard", "--directory", "-z"],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise contract.ContractError(
+            "checkout-secrets",
+            f"could not list ignored files in {checkout} "
+            f"({exc.__class__.__name__}), so secret files cannot be ruled out")
+    if proc.returncode != 0:
+        raise contract.ContractError(
+            "checkout-secrets",
+            f"git ls-files failed in {checkout}, so secret files cannot be ruled out")
+    hits = []
+    for raw in proc.stdout.split(b"\0"):
+        if not raw:
+            continue
+        path = raw.decode("utf-8", errors="replace")
+        parts = path.rstrip("/").split("/")
+        if any(p in _PACKAGE_DIR_NAMES for p in parts):
+            continue
+        base = parts[-1]
+        if path.endswith("/"):
+            if base in _SECRET_DIR_NAMES:
+                hits.append(path)
+            continue
+        if base.endswith(_SECRET_TEMPLATE_SUFFIXES):
+            continue
+        if any(fnmatch.fnmatch(base, pat) for pat in _SECRET_FILE_NAMES):
+            hits.append(path)
+    return sorted(hits)
+
+
+def check_no_secret_files(checkout):
+    """Refuse a review whose checkout holds ignored credential files. No waiver:
+    a secret must never be readable by the review model."""
+    hits = secret_files_in_checkout(checkout)
+    if hits:
+        shown = ", ".join(hits[:5]) + ("..." if len(hits) > 5 else "")
+        raise contract.ContractError(
+            "checkout-secrets",
+            f"{checkout} holds {len(hits)} ignored secret file(s) the review model "
+            f"could read and send to the provider ({shown}); review a clean "
+            "worktree instead: git worktree add --detach <path> <head-sha>")
+
+
 def origin_url(checkout):
     """The checkout's `origin` URL, or None. Only the adapter runs git."""
     try:
@@ -609,6 +679,7 @@ def resolve_review_request(prompt, repo, model, timeout, repo_id, base, head,
     base_sha = resolve_commit(checkout, base, "base")
     head_sha = resolve_commit(checkout, head, "head")
     untracked = check_checkout_is_head(checkout, head_sha, allow_untracked)
+    check_no_secret_files(checkout)
     if waived is not None:
         waived.extend(untracked)
     return contract.build_request(
