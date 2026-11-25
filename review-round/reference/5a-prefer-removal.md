@@ -20,13 +20,6 @@ reasoning from this one case. A value the batch merely carries (an old id, a nam
 path) proves nothing unless nothing else can hold that value now. If you cannot show that,
 leave the refusal in place: a stuck change costs a retry, a wrong pass destroys data.
 
-Measured twice on one day, 2026-09-18, on `secure-dev-guardrails`. PR #7: the round-1 fix
-added private-registry awareness and that addition carried 4 of round 2's findings,
-including printing index URLs with their logins. PR #9: the fix closed 10 of 13 wording
-findings, and all 4 new Majors sat in text it had added (a closed list of "acts" that
-missed restarting a service, a test-system exception, "a limit" accepted as the check,
-a version pin called an integrity check). Every fix that deleted or narrowed held.
-
 **When a finding names a MECHANISM, the fix closes the mechanism, not the line.** A
 mechanism is how a bad result reaches its consumer: "an error lets the caller walk on", "a
 cache in another process holds the old value". Before committing, list every path by which
