@@ -40,7 +40,9 @@ bash ~/.claude/skills/_shared/security-scan.sh --since=<base sha> <repo>
 
 Exit 0, or exit 2 with `NOTHING TO SCAN`, allows CLEAN. Exit 1 or 3 does not, until every
 `[NEW]` finding is fixed in the code, or sits in the waiver register
-(`~/.claude/skills/_shared/security-standards/baseline.yml`) with the owner's approval; fix
+(`~/.claude/skills/_shared/security-standards/baseline.yml`, semgrep findings only; an osv-scanner
+dependency finding goes in an `[[IgnoredVulns]]` entry of an `osv-scanner.toml` beside the lockfile,
+as release step A3b says) with the owner's approval; fix
 it in the code by default. **A reviewer judging a scan finding a false positive, and the
 comment saying so, does NOT clear it**: `/release` A3b reads the scan, never the comment.
 With a finding still open, ask fix-or-waive first; when nobody can answer, post

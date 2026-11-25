@@ -746,6 +746,39 @@ def _check_always_true(tree):
             if _literal_check(n) is True and id(n) not in allowed]
 
 
+def _truthy_const(node):
+    """True when `node` is a constant that is true by itself (True, 1, "x")."""
+    return isinstance(node, ast.Constant) and bool(node.value) and not isinstance(node.value, type(None))
+
+
+def _conditional_true(expr):
+    """True when `expr` is `X if Y else <truthy constant>` or `<truthy constant> if Y else X` and the
+    other arm is not a constant: then one branch checks nothing. `True if Y else False` is `assert Y`."""
+    if not isinstance(expr, ast.IfExp):
+        return False
+    arms = (expr.body, expr.orelse)
+    return any(_truthy_const(a) for a in arms) and not all(isinstance(a, ast.Constant) for a in arms)
+
+
+def _check_conditional_true(tree):
+    """`assert X if Y else True` passes whenever Y is false, so in a fixture where Y never holds the
+    test can never fail. Read: an assert statement, or a check call statement (house `check`/`ok`/
+    `expect`, `assertTrue`) whose first argument is that shape."""
+    out = []
+    for n in ast.walk(tree):
+        expr = None
+        if isinstance(n, ast.Assert):
+            expr = n.test
+        elif isinstance(n, ast.Expr) and isinstance(n.value, ast.Call) and _call_name(n.value.func) in _CHECK_CALLS:
+            expr = n.value.args[0] if n.value.args else None
+        if expr is not None and _conditional_true(expr):
+            out.append("CONDITIONAL-TRUE CHECK at line %d: one arm of this check is a constant True, so "
+                       "whenever its condition is false it checks nothing, and a fixture where the "
+                       "condition never holds makes the test unable to fail. Assert the condition "
+                       "itself, or split it into two tests with fixtures for each side." % n.lineno)
+    return out
+
+
 def _text_arg(call):
     """The literal text an assertContains/assertNotContains looks for, or None."""
     arg = call.args[1] if len(call.args) > 1 else next(
@@ -893,6 +926,42 @@ def _check_render_name_request_only(tree):
     return findings
 
 
+# A test that proves what a page SHOWS by reading the stylesheet's TEXT.
+# A rule's text in the file does not say it wins the cascade: an !important or a later,
+# more specific selector elsewhere can still hide or move the element.
+_LAYOUT_RULE = re.compile(r"\b(display|visibility|position|opacity)\s*:|\[hidden\]|:has\(|\[open\]")
+_BROWSER_READS = ("getComputedStyle", "inner_text", "innerText", "is_visible", "to_be_visible",
+                  "bounding_box", "evaluate(")
+
+
+def _check_stylesheet_text(tree, src):
+    """A show/hide/position claim asserted on a stylesheet's TEXT, in a test that never asks a browser."""
+    findings = []
+    for fn in ast.walk(tree):
+        if not (isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name.startswith("test")):
+            continue
+        body = ast.get_source_segment(src, fn) or ""
+        reads_css = any(isinstance(c, ast.Constant) and isinstance(c.value, str) and ".css" in c.value
+                        for c in ast.walk(fn))
+        if not reads_css or any(r in body for r in _BROWSER_READS):
+            continue
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Assert):
+                continue
+            for c in ast.walk(node.test):
+                if (isinstance(c, ast.Compare) and any(isinstance(o, (ast.In, ast.NotIn)) for o in c.ops)
+                        and isinstance(c.left, ast.Constant) and isinstance(c.left.value, str)
+                        and _LAYOUT_RULE.search(c.left.value)):
+                    findings.append(
+                        "STYLESHEET TEXT at line %d (%s): this asserts the stylesheet holds %r, which proves "
+                        "the text is there, not what the browser shows. Another rule can still win (an "
+                        "!important, a later or more specific selector). For a show, hide or position "
+                        "claim, also read the page in a browser (Playwright: inner_text, "
+                        "getComputedStyle)." % (c.lineno, fn.name, c.left.value[:60]))
+                    break
+    return findings
+
+
 def analyze(path):
     """Return (status, findings) for one on-disk test file."""
     try:
@@ -916,6 +985,8 @@ def analyze(path):
     findings.extend(_check_bare_name_order(tree))
     findings.extend(_check_render_name_request_only(tree))
     findings.extend(_check_always_true(tree))
+    findings.extend(_check_conditional_true(tree))
+    findings.extend(_check_stylesheet_text(tree, src))
 
     guard_idx = None
     guard = None

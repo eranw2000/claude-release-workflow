@@ -113,8 +113,11 @@ Reproduce each chosen finding by running the failing input through the real path
 
 **Before writing any fix, list by command every path to the finding's RESULT (step 5a) and put
 the list in the fix commit message**: a finding names one site, its result usually has others.
+A layout change (a grid, a flex row, a shared style) shows its result in EVERY element it
+lays out, so list those elements, never "the container is drawn once".
 Check the FINAL value once, after every step that can replace it (a correction, an override),
 never each source: a source check refuses a value a later step would have fixed.
+A fix adding an exception also lists every place that produces the exempted case.
 
 ### 5. Verify suggestions against the authoritative gate
 

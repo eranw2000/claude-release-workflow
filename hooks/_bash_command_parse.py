@@ -52,8 +52,12 @@ PUNCTUATION_CHARS = "();<>|&\n"
 # Shell keywords and wrappers that can sit in front of the real command word.
 PREFIXES = {
     "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for",
-    "!", "time", "sudo", "command", "nohup", "exec", "env",
+    "!", "time", "sudo", "command", "nohup", "exec", "env", "nice", "timeout", "gtimeout",
+    "{",
 }
+# `(` stays out on purpose. split_segments already ends a command there, so only a caller
+# reading raw tokens could reach it, and to such a caller a `cd` inside `( )` would look
+# like it moved the shell. It does not: `then (cd /tmp/a); fi; rm -rf x` deletes from here.
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 
 ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -143,11 +147,24 @@ def tokenize(text):
         raise UnparseableCommand(str(exc))
 
 
+def _ends_a_command(tok):
+    """True for an operator token, including a run shlex grouped into one token.
+
+    A run can mix brackets with operators (`);`, `)&&`, `;(`, `)\n`) and ends a command,
+    so `(cd /tmp); git push origin main` is two commands.
+    A run of brackets alone (`((`, `))`) is arithmetic, so it stays a word.
+    At this point a quoted `';'` also ends a command.
+    """
+    if tok in OPERATORS:
+        return True
+    return bool(tok) and all(c in "()|&;\n" for c in tok) and bool(tok.strip("()"))
+
+
 def split_segments(tokens):
     """Split a token list into one token list per command."""
     segments, current = [], []
     for tok in tokens:
-        if tok in OPERATORS or (tok and all(c in "|&;\n" for c in tok)):
+        if _ends_a_command(tok):
             if current:
                 segments.append(current)
                 current = []
@@ -173,6 +190,12 @@ WRAPPER_VALUE_FLAGS = {
     "sudo": {"-u", "-g", "-h", "-p", "-U", "-C", "-D", "-R", "-r", "-t", "-T"},
     "env": {"-u", "-C", "-S", "-P"},
     "exec": {"-a"},
+    # GNU coreutils manual: `-n adjustment`, `--adjustment=adjustment`, and "an obsolete
+    # option syntax -adjustment" (a lone flag, so nothing to consume).
+    "nice": {"-n", "--adjustment"},
+    # GNU coreutils manual: `timeout [option]... duration command [arg]...`
+    "timeout": {"-k", "-s", "--kill-after", "--signal"},
+    "gtimeout": {"-k", "-s", "--kill-after", "--signal"},
 }
 
 
@@ -201,11 +224,16 @@ def _env_split_string(head, flag, rest):
         return value.split()
 
 
-def strip_prefixes(tokens):
-    """Drop shell keywords, wrappers, their options and VAR=value assignments."""
+def strip_prefixes(tokens, stop_at=()):
+    """Drop shell keywords, wrappers, their options and VAR=value assignments.
+
+    A word in `stop_at` is kept as the command, for a caller asking about that wrapper.
+    """
     out = list(tokens)
     while out:
         head = out[0]
+        if head in stop_at:
+            break
         if head in PREFIXES:
             out.pop(0)
             value_flags = WRAPPER_VALUE_FLAGS.get(head, set())
@@ -221,6 +249,8 @@ def strip_prefixes(tokens):
                     continue
                 if flag in value_flags and out:
                     out.pop(0)
+            if head in ("timeout", "gtimeout") and out:
+                out.pop(0)  # the duration, always the first word after the options
             continue
         if ENV_ASSIGN.match(head):
             out.pop(0)
@@ -381,3 +411,301 @@ def pipeline_stages(command):
     if len(current) > 1:
         pipelines.append(current)
     return pipelines
+
+
+# Which folders a command could run in.
+#
+# A guard reads a `cd` in a straight line of commands the usual way. A `cd` inside brackets,
+# a block, a pipe or behind a wrapper may or may not move the shell, so for those commands the guard
+# ALSO judges the command in every folder it could be in. It counts brackets and blocks instead of
+# following the shell's grammar, and plain is an allow-list, so what it does not recognise is not
+# plain, and the result is one more folder judged.
+
+_MAX_FOLDERS = 16
+_MAX_NESTING = 3
+_OPENS_BLOCK = {"if", "for", "while", "until", "case", "select"}
+_CLOSES_BLOCK = {"fi", "done", "esac", "}"}
+# The next word after one of these is still a command.
+_KEEPS_POSITION = {"if", "then", "do", "else", "elif", "while", "until", "!", "time", "{"}
+# These set variables. A word after one is an argument, never a command, so `export cd X` is no cd.
+_DECLARES = {"export", "declare", "typeset", "readonly", "local"}
+_TEST_COMMANDS = {"[", "[[", "test", "true", "false"}
+_VARIABLE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+_MASKED = re.compile(r"QX(\d+)QX")
+
+
+def _mask_quotes(text):
+    """Replace quoted text and escaped characters with a plain word, so only real syntax is counted.
+
+    Returns (masked text, the original pieces). Raises UnparseableCommand on an open quote.
+    """
+    out, pieces, i, n = [], [], 0, len(text)
+
+    def piece(value):
+        pieces.append(value)
+        out.append("QX%dQX" % (len(pieces) - 1))
+
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            if text[i + 1] != "\n":     # a backslash and a newline join two lines
+                piece(text[i + 1])
+            i += 2
+        elif c == "$" and text[i + 1:i + 2] == "'":
+            j = i + 2
+            while j < n and text[j] != "'":
+                j += 2 if text[j] == "\\" else 1
+            if j >= n:
+                raise UnparseableCommand("open $' quote")
+            piece(text[i + 2:j])
+            i = j + 1
+        elif c == "'":
+            j = text.find("'", i + 1)
+            if j < 0:
+                raise UnparseableCommand("open ' quote")
+            piece(text[i + 1:j])
+            i = j + 1
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            if j >= n:
+                raise UnparseableCommand('open " quote')
+            piece(text[i + 1:j])
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out), pieces
+
+
+def _is_punctuation(tok):
+    return bool(tok) and all(c in PUNCTUATION_CHARS for c in tok)
+
+
+def _operator(tok):
+    return tok.strip("\n()")
+
+
+def _touches_pipe_or_background(tokens, start):
+    """True when the next operator is a pipe, or a `&` ends this and-or list."""
+    first = True
+    i = start
+    while i < len(tokens):
+        tok = tokens[i]
+        i += 1
+        if not _ends_a_command(tok):
+            continue
+        op = _operator(tok)
+        if not tok.strip("()"):
+            continue
+        if first and op in ("|", "|&"):
+            return True
+        first = False
+        if op == "&":
+            return True
+        if op not in ("&&", "||", "|", "|&"):
+            return False
+    return False
+
+
+def _read_cds(text, nesting=0):
+    """(any cd not plain, cd targets, needs the home folder, {variable: [written values]})."""
+    masked, pieces = _mask_quotes(strip_comments(text))
+
+    def unmask(tok):
+        return _MASKED.sub(lambda m: pieces[int(m.group(1))], tok)
+
+    tokens = tokenize(masked)
+    not_plain = needs_home = never = False
+    targets, assigns = [], {}
+    depth = block = ticks = plain_count = plain_groups = 0
+    at_start, after_close, declaring = True, False, False
+    prev_op, seg_head, left_head = "", None, None
+    i, n = 0, len(tokens)
+    while i < n:
+        tok = tokens[i]
+        i += 1
+        if _is_punctuation(tok):
+            depth = max(0, depth + tok.count("(") - tok.count(")"))
+            if _ends_a_command(tok):
+                at_start, after_close = True, tok.endswith(")")
+                prev_op, left_head, seg_head = _operator(tok), seg_head, None
+            elif "(" in tok:
+                at_start, after_close = True, False
+            elif not tok.strip(")"):
+                at_start, after_close = True, True
+            else:
+                i += 1                  # a redirect, and the word it points at
+            continue
+        ticks += tok.count("`")
+        if tok == "{" and not at_start:
+            block += 1
+            at_start = True
+            continue
+        if not at_start:
+            if declaring and ENV_ASSIGN.match(tok):
+                name, _, value = tok.partition("=")
+                assigns.setdefault(name, []).append(unmask(value))
+            continue
+        closed, after_close = after_close, False
+        if ENV_ASSIGN.match(tok):
+            name, _, value = tok.partition("=")
+            assigns.setdefault(name, []).append(unmask(value))
+            continue
+        doubtful = (prev_op in ("|", "|&", "||")
+                    or (prev_op == "&&" and left_head in _TEST_COMMANDS))
+        if tok == "{" and not (depth or block or doubtful or tokens[max(0, i - 2)].strip() == "()"):
+            # A group on its own runs in this shell, so a cd in it moves the shell...
+            plain_groups += 1
+        elif tok == "}" and plain_groups:
+            # ...unless the group is piped or sent to the background, which is known only here.
+            plain_groups -= 1
+            not_plain = not_plain or _touches_pipe_or_background(tokens, i)
+        elif tok in _OPENS_BLOCK or tok == "{":
+            block += 1
+        elif tok in _CLOSES_BLOCK:
+            block = max(0, block - 1)
+        if tok in _KEEPS_POSITION:
+            continue
+        if tok == "builtin":
+            never = True
+            continue
+        at_start = False
+        declaring = tok in _DECLARES
+        if declaring:
+            seg_head = tok
+            continue
+        if tok in ("case", "function"):
+            never = True
+        if tok in ("pushd", "popd"):
+            not_plain = True
+            words = [unmask(t) for t in tokens[i:i + 4] if not _is_punctuation(t) and not t.startswith(("-", "+"))]
+            if tok == "pushd" and words:
+                targets.append(words[0])
+            continue
+        if tok == "eval":
+            not_plain = True
+            j = i
+            while j < n and not _ends_a_command(tokens[j]):
+                j += 1
+            if nesting < _MAX_NESTING:
+                _, inner, home, inner_vars = _read_cds(" ".join(unmask(t) for t in tokens[i:j]), nesting + 1)
+                targets += inner
+                needs_home = needs_home or home
+                for k, v in inner_vars.items():
+                    assigns.setdefault(k, []).extend(v)
+            continue
+        if tok != "cd":
+            seg_head = tok
+            continue
+        seg_head = "cd"
+        j, args = i, []
+        while j < n and not _is_punctuation(tokens[j]):
+            args.append(tokens[j])
+            j += 1
+        if args and j < n and args[-1].isdigit() and not _ends_a_command(tokens[j]):
+            args.pop()                  # the 2 of `2>/dev/null`
+        operands = [a for a in args if not a.startswith("-")]
+        if operands:
+            targets.append(unmask(operands[-1]))
+        elif "-" not in args:
+            needs_home = True
+        if (len(args) == 1 and not args[0].startswith("-")
+                and not (depth or block or ticks % 2 or never or closed)
+                and prev_op not in ("|", "|&", "||")
+                and not (prev_op == "&&" and left_head in _TEST_COMMANDS)
+                and not _touches_pipe_or_background(tokens, i)):
+            plain_count += 1
+        else:
+            not_plain = True
+
+    segments = split_segments(tokens)
+    hits = 0
+    for seg in segments:
+        target = cd_target(seg)
+        if target:
+            hits += 1
+            if not target.startswith("-"):
+                targets.append(unmask(target))
+        inner = nested_shell_command(seg)
+        if inner and nesting < _MAX_NESTING:
+            inner_plain, inner_targets, home, inner_vars = _read_cds(unmask(inner), nesting + 1)
+            not_plain = not_plain or inner_plain
+            targets += inner_targets
+            needs_home = needs_home or home
+            for k, v in inner_vars.items():
+                assigns.setdefault(k, []).extend(v)
+    # A cd the guards read, in a place this pass did not call plain (`nice -n 5 cd B`).
+    if hits > plain_count:
+        not_plain = True
+    return not_plain, targets, needs_home, assigns
+
+
+def _expansions(target, assigns):
+    """Every way a target's variables can be read from the command or the environment."""
+    done, todo = [], [target]
+    for _ in range(4):
+        following = []
+        for item in todo:
+            m = _VARIABLE.search(item)
+            if not m:
+                done.append(item)
+                continue
+            values = assigns.get(m.group(1)) or ([os.environ[m.group(1)]] if m.group(1) in os.environ else [])
+            for value in values:
+                following.append(item[:m.start()] + value + item[m.end():])
+        todo = following[:_MAX_FOLDERS]
+    return [d for d in done if "$" not in d and "`" not in d]
+
+
+def _extra_folders(command, cwd):
+    scannable, _bodies = strip_heredocs(command)
+    try:
+        readings = [_read_cds(scannable)]
+    except UnparseableCommand:
+        readings = []
+        for line in scannable.split("\n"):
+            try:
+                reading = _read_cds(line)
+            except UnparseableCommand:
+                continue
+            # Part of this text cannot be read, so no line of it can be vouched for as plain.
+            readings.append((bool(reading[1]) or reading[0],) + reading[1:])
+    if not any(r[0] for r in readings):
+        return []
+    assigns = {}
+    for r in readings:
+        for k, v in r[3].items():
+            assigns.setdefault(k, []).extend(v)
+    folders = [cwd]
+
+    def add(path):
+        if path not in folders and len(folders) < _MAX_FOLDERS:
+            folders.append(path)
+
+    if any(r[2] for r in readings):
+        add(os.path.expanduser("~"))
+    for r in readings:
+        for target in r[1]:
+            for item in _expansions(target, assigns):
+                item = os.path.expanduser(item)
+                if os.path.isabs(item):
+                    add(os.path.normpath(item))
+                else:
+                    for base in list(folders):
+                        add(os.path.normpath(os.path.join(base, item)))
+    return folders
+
+
+def extra_folders(command, cwd):
+    """Every folder a guard must also judge `command` in, or [] when each `cd` in it is plain.
+
+    The first entry is `cwd`. A guard runs its usual check first, then the same check once per
+    folder here, ignoring the `cd`s, and keeps the loudest answer. Never raises: any failure here
+    returns `cwd` alone, so the guard still has its usual reading.
+    """
+    try:
+        return _extra_folders(command, cwd)
+    except Exception:  # noqa: BLE001 - a guard must never fail because of this helper
+        return [cwd]

@@ -74,7 +74,11 @@ gate. Since that date the scan tags every finding and prints the split:
 
 **Then the gate: a release needs no unresolved blocking `[NEW]` finding, and every accepted
 high finding named in the waiver register** at `~/.claude/skills/_shared/security-standards/baseline.yml`,
-with an owner, a justification and an expiry. A `[NEW]` finding kept without a waiver entry is
+with an owner, a justification and an expiry. **That register waives SEMGREP findings only** (its
+header: only the semgrep reporter reads it). An **osv-scanner** (dependency) finding is waived by an
+`[[IgnoredVulns]]` entry (`id`, `ignoreUntil`, `reason`) in an `osv-scanner.toml` in the lockfile's own
+directory (osv-scanner docs: "place an osv-scanner.toml file in the scanned file's directory"), with
+the owner's approval named in the commit; re-run the scan, and once without the file as a control. A `[NEW]` finding kept without a waiver entry is
 an unresolved blocking finding; a `[PRE-EXISTING]` one is named in the report instead. Bands are in `security-standards/severity-taxonomy.md`.
 
 **The register is read by the scan, so a waiver actually takes effect.** An entry needs a

@@ -13,4 +13,4 @@ PUSHED=$(git rev-parse HEAD)          # or: git ls-remote origin "$BASE" | cut -
 - If no auto-deploy is configured, say so.
 - **Wait on a check's EXIT STATUS** (`until <check>; do sleep 15; done`), never grep its text: a grep can match nothing for ever and reads like a slow deploy.
 
-A live-but-stale deploy (status live, commit mismatch) is a FAILED release, not a passed one. Report it as such and either re-trigger or hand off.
+A live-but-stale deploy (status live, commit mismatch) is a FAILED release, not a passed one. Report it as such.
